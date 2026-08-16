@@ -11,6 +11,7 @@ import {
 import { PlaylistForm } from "@/components/channels/PlaylistForm";
 import { PlaylistBar } from "@/components/channels/PlaylistBar";
 import { ChannelList } from "@/components/channels/ChannelList";
+import { SeriesList } from "@/components/channels/SeriesList";
 import { VideoPlayer } from "@/components/player/VideoPlayer";
 import type { Channel, ChannelKind, Playlist } from "@/lib/types";
 
@@ -412,6 +413,15 @@ export default function HomePage() {
             >
               Kanallar yükleniyor…
             </p>
+          ) : activeTab === "series" ? (
+            // Dizi sekmesi: iki seviyeli gezinme (dizi → bölüm)
+            // key={activeTab} sekme değişiminde durumu sıfırlar
+            <SeriesList
+              key={activeTab}
+              channels={activeChannels}
+              selectedId={selected?.id ?? null}
+              onSelect={handleSelect}
+            />
           ) : (
             // key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (arama/grup/kaydırma sıfırlanır)
             <ChannelList
