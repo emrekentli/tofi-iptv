@@ -54,11 +54,12 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
       const engine = detectEngine(src);
 
       if (engine === "native") {
+        const onNativeError = () =>
+          fail("Bu dosya biçimi tarayıcıda oynatılamıyor.");
         vid.src = src;
-        vid.addEventListener("error", () =>
-          fail("Bu dosya biçimi tarayıcıda oynatılamıyor."),
-        );
+        vid.addEventListener("error", onNativeError);
         cleanup = () => {
+          vid.removeEventListener("error", onNativeError);
           vid.removeAttribute("src");
           vid.load();
         };
@@ -68,60 +69,85 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
       if (engine === "hls") {
         // Safari HLS'i kendi oynatır; hls.js'e gerek yok.
         if (vid.canPlayType("application/vnd.apple.mpegurl")) {
+          const onSafariError = () =>
+            retryOrFail("Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.");
           vid.src = src;
+          vid.addEventListener("error", onSafariError);
           cleanup = () => {
+            vid.removeEventListener("error", onSafariError);
             vid.removeAttribute("src");
             vid.load();
           };
           return;
         }
 
-        const { default: Hls } = await import("hls.js");
+        let hls: import("hls.js").default | null = null;
+        try {
+          const { default: Hls } = await import("hls.js");
+          if (disposed) return;
+          if (!Hls.isSupported()) {
+            fail("Tarayıcınız bu yayın türünü desteklemiyor.");
+            return;
+          }
+
+          hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+          hls.loadSource(src);
+          hls.attachMedia(vid);
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (!data.fatal) return;
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              retryOrFail(
+                "Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.",
+              );
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              fail(
+                "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).",
+              );
+            } else {
+              fail("Yayın açılamadı.");
+            }
+          });
+          cleanup = () => hls!.destroy();
+        } catch {
+          if (!disposed) fail("Oynatıcı yüklenemedi. Lütfen tekrar deneyin.");
+        }
+        return;
+      }
+
+      let player: import("mpegts.js").default.Player | null = null;
+      try {
+        const { default: mpegts } = await import("mpegts.js");
         if (disposed) return;
-        if (!Hls.isSupported()) {
+        if (!mpegts.isSupported()) {
           fail("Tarayıcınız bu yayın türünü desteklemiyor.");
           return;
         }
 
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-        hls.loadSource(src);
-        hls.attachMedia(vid);
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (!data.fatal) return;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            retryOrFail("Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.");
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            fail(
-              "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).",
-            );
-          } else {
-            fail("Yayın açılamadı.");
-          }
+        player = mpegts.createPlayer({
+          type: "mpegts",
+          isLive: true,
+          url: src,
         });
-        cleanup = () => hls.destroy();
-        return;
+        player.attachMediaElement(vid);
+        player.load();
+        player.on(
+          mpegts.Events.ERROR,
+          (errorType: string) => {
+            if (errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
+              fail(
+                "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).",
+              );
+            } else {
+              retryOrFail("Yayın kesildi veya kaynak yanıt vermiyor.");
+            }
+          },
+        );
+        cleanup = () => {
+          player!.destroy();
+        };
+      } catch {
+        if (!disposed) fail("Oynatıcı yüklenemedi. Lütfen tekrar deneyin.");
       }
-
-      const { default: mpegts } = await import("mpegts.js");
-      if (disposed) return;
-      if (!mpegts.isSupported()) {
-        fail("Tarayıcınız bu yayın türünü desteklemiyor.");
-        return;
-      }
-
-      const player = mpegts.createPlayer({
-        type: "mpegts",
-        isLive: true,
-        url: src,
-      });
-      player.attachMediaElement(vid);
-      player.load();
-      player.on(mpegts.Events.ERROR, () =>
-        retryOrFail("Yayın kesildi veya kaynak yanıt vermiyor."),
-      );
-      cleanup = () => {
-        player.destroy();
-      };
     }
 
     void start();
