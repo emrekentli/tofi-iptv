@@ -40,6 +40,14 @@ describe("rewriteHlsPlaylist", () => {
     );
   });
 
+  it("EXT-X-MAP içindeki URI'yi proxy'ler", () => {
+    const input = '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n';
+    const lines = rewriteHlsPlaylist(input, BASE, SECRET).split("\n");
+    expect(targetOf(lines[1].match(/URI="([^"]+)"/)![1])).toBe(
+      "http://provider.example/live/init.mp4",
+    );
+  });
+
   it("URI içermeyen etiketlere dokunmaz", () => {
     const input = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\n";
     const output = rewriteHlsPlaylist(input, BASE, SECRET);
@@ -52,9 +60,15 @@ describe("rewriteHlsPlaylist", () => {
     expect(rewriteHlsPlaylist(input, BASE, SECRET).split("\n")[1]).toBe("");
   });
 
-  it("çözümlenemeyen satırı bozmadan bırakır", () => {
+  it("belirsiz/geçersiz göreli yolları bozmadan bırakır", () => {
+    // RFC 3986: göreli yolun ilk segmenti ':' ile başlayamaz
     const input = "#EXTM3U\n::gecersiz::\n";
     expect(rewriteHlsPlaylist(input, BASE, SECRET)).toContain("::gecersiz::");
+  });
+
+  it("gerçekten çözümlenemeyen URL'leri bozmadan bırakır", () => {
+    const input = "#EXTM3U\nhttp://\n";
+    expect(rewriteHlsPlaylist(input, BASE, SECRET)).toContain("http://");
   });
 });
 

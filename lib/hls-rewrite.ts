@@ -1,5 +1,6 @@
 import { proxyUrl } from "./sign";
 
+// /g flag güvenli: String.prototype.replace her çağrı öncesi lastIndex'i sıfırlar.
 const URI_ATTRIBUTE = /URI="([^"]+)"/g;
 
 /** Yanıtın bir HLS playlist'i olup olmadığını içerik tipinden, yoksa uzantıdan anlar. */
@@ -12,7 +13,8 @@ export function isHlsResponse(contentType: string | null, url: string): boolean 
 /** Göreli veya mutlak bir adresi imzalı proxy URL'ine çevirir. Çözümlenemezse null. */
 function toProxy(uri: string, baseUrl: string, secret: string): string | null {
   try {
-    // RFC 3986: göreli yolun ilk segmenti ':' ile başlayamaz; geçersiz satır.
+    // RFC 3986 §4.2: göreli yolun ilk segmenti ':' ile başlayamaz (belirsiz sözdizim).
+    // URL() yapıcısı bunu hataya dönüştürmez; bu guard gereklidir.
     if (uri.startsWith(":")) return null;
     return proxyUrl(new URL(uri, baseUrl).toString(), secret);
   } catch {

@@ -76,6 +76,7 @@ export async function GET(request: Request): Promise<Response> {
     // Playlist küçük bir metin dosyasıdır; belleğe alıp yeniden yazmak güvenlidir.
     const rewritten = rewriteHlsPlaylist(await upstream.text(), upstream.url, secret);
     responseHeaders.delete("content-length"); // uzunluk değişti
+    // fetch() önceden yönlendirmeleri izler; yeniden yazılmış playlist her zaman 200 döner.
     return new Response(rewritten, { status: 200, headers: responseHeaders });
   }
 
