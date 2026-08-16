@@ -4,7 +4,6 @@
 // "use client" direktifiyle işaretlenmelidir.
 import Dexie, { type Table } from "dexie";
 import type { Channel, ChannelKind, Playlist } from "./types";
-import { playlistIdFromUrl } from "./playlist-id";
 export { playlistIdFromUrl } from "./playlist-id";
 
 const CHUNK_SIZE = 5_000;
@@ -28,34 +27,39 @@ class TofiDb extends Dexie {
         playlists: "id, addedAt",
       })
       .upgrade(async (tx) => {
-        // Sürüm 1 kayıtlarında playlistId yok. localStorage'da saklanan adresten
-        // bir playlist üretip mevcut kayıtları ona bağlıyoruz; veri kaybı olmasın.
+        // Sürüm 1 kayıtlarında playlistId yok; mevcut kayıtları tek bir
+        // playlist'e bağlıyoruz. Veri kaybı olmaz.
         // Bu yükseltme Dexie'nin atomik işlemi içinde çalışır; kısmi çalışma geri alınır.
-        const existing = await tx.table("channels").count();
-        if (existing === 0) return;
-        const url = (() => {
-          try {
-            return localStorage.getItem("tofi-playlist-url") ?? "";
-          } catch {
-            return "";
-          }
-        })();
-        // I3: id'yi addPlaylist ile aynı türetici fonksiyondan üret; boş URL için yedek.
-        // Bu sayede aynı URL sonradan tekrar eklenince aynı id üretilir — yenileme mümkün olur.
-        const id = url ? await playlistIdFromUrl(url) : "migrated";
-        const name = url ? new URL(url).host : "Playlist";
+        //
+        // ADRES KURTARILAMAZ: Eski kod burada localStorage["tofi-playlist-url"]
+        // okuyordu, ama o anahtarı hiçbir sürüm yazmadı — depolamaya yalnızca
+        // "tofi-active-playlist" yazılır. Dolayısıyla adres her zaman boştu ve
+        // ondan id türeten dal hiç çalışmadı. Adres olmadan bu playlist
+        // YENİLENEMEZ; kullanıcı adresi yeniden girmelidir. `needsReimport`
+        // bayrağı arayüzde bunu açıkça gösterir.
+        const id = "migrated";
+
+        // Kanal id'lerini playlist ile ad-alanla; addPlaylist formatıyla uyumlu.
+        // Eski id (URL hash) `${id}:${eskiId}` biçimine dönüşür.
+        // modify() satır sayısını döndürür — ayrıca bir count() taraması
+        // yapmaya gerek yok (132 bin satırda gereksiz tam tarama olurdu).
+        const migrated = await tx
+          .table("channels")
+          .toCollection()
+          .modify((ch: Record<string, unknown>) => {
+            ch["id"] = `${id}:${ch["id"]}`;
+            ch["playlistId"] = id;
+          });
+
+        if (migrated === 0) return;
+
         await tx.table("playlists").put({
           id,
-          name,
-          url,
+          name: "Eski playlist (adres kayıp)",
+          url: "",
           addedAt: Date.now(),
-          channelCount: existing,
-        });
-        // I3: Kanal id'lerini yeni playlist id ile ad-alanla; addPlaylist formatıyla uyumlu.
-        // Eski id (URL hash), yeni id `${derivedId}:${oldId}` biçimine dönüştürülür.
-        await tx.table("channels").toCollection().modify((ch: Record<string, unknown>) => {
-          ch["id"] = `${id}:${ch["id"]}`;
-          ch["playlistId"] = id;
+          channelCount: migrated,
+          needsReimport: true,
         });
       });
   }
@@ -92,9 +96,6 @@ export async function addPlaylist(
     .equals(p.id)
     .delete();
 
-  // Playlist kaydını yaz.
-  await db.playlists.put(p);
-
   // Kanal id'lerini playlist ile ad-alanla; aynı URL iki playlist'te çakışmaz.
   const namespaced = channels.map((ch) => ({
     ...ch,
@@ -113,8 +114,10 @@ export async function addPlaylist(
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
-  // Kanal sayısını güncelle.
-  await db.playlists.update(p.id, { channelCount: namespaced.length });
+  // Playlist kaydı kanallardan SONRA yazılır. Yarıda kesilen bir içe aktarma,
+  // gerçekte var olmayan bir kanal sayısı iddia eden playlist satırı bırakmasın:
+  // satır hiç yazılmazsa playlist listede görünmez ve kullanıcı yeniden ekler.
+  await db.playlists.put({ ...p, channelCount: namespaced.length });
 }
 
 /** Bir playlist'i ve ona ait tüm kanalları siler. */

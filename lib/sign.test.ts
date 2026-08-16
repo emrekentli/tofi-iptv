@@ -28,8 +28,15 @@ describe("encryptToken / decryptToken", () => {
 
   it("değiştirilmiş token null döner", () => {
     const token = encryptToken(URL_A, SECRET);
-    // Son karakteri değiştir
-    const tampered = token.slice(0, -1) + (token.at(-1) === "A" ? "B" : "A");
+    // Ortadaki bir karakteri değiştir — SON karakter değil!
+    // base64url'de son karakter, bayt sayısına göre kullanılmayan bitler
+    // taşıyabilir; onu değiştirmek çözülen baytları hiç değiştirmeyebilir ve
+    // test rastgele IV'ye bağlı olarak yaklaşık %50 oranında yanlış geçerdi.
+    // Ortadaki karakter her zaman tam bir bayta katkı verir.
+    const mid = Math.floor(token.length / 2);
+    const swapped = token[mid] === "A" ? "B" : "A";
+    const tampered = token.slice(0, mid) + swapped + token.slice(mid + 1);
+    expect(tampered).not.toBe(token);
     expect(decryptToken(tampered, SECRET)).toBeNull();
   });
 

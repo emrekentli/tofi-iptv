@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft } from "lucide-react";
+import { nextFocusableIndex } from "@/lib/series-focus";
 import type { Channel } from "@/lib/types";
 
 const ROW_HEIGHT = 56; // estimateSize; gerçek yükseklik ≥44px CSS ile garanti edilir
@@ -367,11 +368,14 @@ function EpisodeList({ title, rows, selectedId, onSelect, onBack }: EpisodeListP
     getItemKey: (index) => rows[index]!.key,
   });
 
-  function moveFocus(nextIdx: number) {
-    // Sezon başlıklarını atla
-    let idx = Math.max(0, Math.min(nextIdx, rows.length - 1));
-    while (idx < rows.length - 1 && rows[idx]?.type === "season") idx++;
-    while (idx > 0 && rows[idx]?.type === "season") idx--;
+  /**
+   * Sezon başlıklarını İSTENEN YÖNDE atlayarak odağı taşır.
+   * `dir` şart: yön korunmazsa bir sezonun ilk bölümünde yukarı ok,
+   * başlığı atlayıp geldiği satıra geri döner ve önceki sezona geçilemez.
+   */
+  function moveFocus(nextIdx: number, dir: 1 | -1) {
+    const idx = nextFocusableIndex(rows, nextIdx, dir);
+    if (idx === null) return;
     setFocusedIdx(idx);
     virtualizer.scrollToIndex(idx, { align: "auto" });
     requestAnimationFrame(() => {
@@ -409,16 +413,16 @@ function EpisodeList({ title, rows, selectedId, onSelect, onBack }: EpisodeListP
           if (rows.length === 0) return;
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            moveFocus(focusedIdx + 1);
+            moveFocus(focusedIdx + 1, 1);
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
-            moveFocus(focusedIdx - 1);
+            moveFocus(focusedIdx - 1, -1);
           } else if (e.key === "Home") {
             e.preventDefault();
-            moveFocus(0);
+            moveFocus(0, 1);
           } else if (e.key === "End") {
             e.preventDefault();
-            moveFocus(rows.length - 1);
+            moveFocus(rows.length - 1, -1);
           }
         }}
       >

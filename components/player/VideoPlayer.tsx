@@ -2,23 +2,85 @@
 
 import { AlertCircle, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { detectEngine } from "@/lib/stream-type";
+import {
+  detectEngine,
+  fallbackEngine,
+  isCodecError,
+  isContainerMismatch,
+  type StreamEngine,
+} from "@/lib/stream-type";
+import type { ChannelKind } from "@/lib/types";
 
 const MAX_AUTO_RETRIES = 3;
 
+const MSG_UNREACHABLE = "Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.";
+const MSG_CODEC =
+  "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).";
+
 type Status = "loading" | "ready" | "error";
 
-export function VideoPlayer({ src, title }: { src: string; title?: string }) {
+interface Props {
+  /** Oynatıcıya verilecek adres: proxy (`/api/stream?t=…`) veya ham adres. */
+  src: string;
+  /**
+   * Ham sağlayıcı adresi. Motor tespiti BUNUN üzerinden yapılır.
+   * `src` proxy adresi olduğunda token şifreli olduğu için uzantı görünmez;
+   * ham adres olmadan tespit varsayılana düşer ve canlı yayınlar açılmaz.
+   * Verilmezse `src` üzerinden tespit edilir (eski davranış).
+   */
+  sourceUrl?: string;
+  /** Kanal türü. Yalnızca `live` için mpegts.js canlı kipinde açılır. */
+  kind?: ChannelKind;
+  title?: string;
+  /**
+   * Ağ hatası yüzünden yayın açılamadığında çağrılır.
+   * Doğrudan kipte sağlayıcı CORS başlığı göndermiyorsa da bu yola girilir;
+   * sayfa buna karşılık proxy'ye düşebilir.
+   */
+  onUnreachable?: () => void;
+}
+
+export function VideoPlayer({
+  src,
+  sourceUrl,
+  kind,
+  title,
+  onUnreachable,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState("");
   const [attempt, setAttempt] = useState(0);
   const autoRetries = useRef(0);
 
+  // Yayın gerçekten başladı mı? İlk kareden ÖNCE gelen ölümcül medya hatası
+  // genelde konteynerin yanlış tanındığını gösterir; oynatma başladıktan sonra
+  // gelen aynı hata gerçek bir codec sorunudur.
+  const hasPlayed = useRef(false);
+
+  // Motor takası: `src` ile birlikte saklanır. Böylece ayrı bir sıfırlama
+  // efektine gerek kalmaz ve takasın bu yayın için zaten denenmiş olduğu
+  // tek bir karşılaştırmayla anlaşılır — sonsuz takas döngüsü imkânsızdır.
+  const [engineOverride, setEngineOverride] = useState<{
+    src: string;
+    engine: StreamEngine;
+  } | null>(null);
+
+  // Prop'u ref'te tut; efekt bağımlılıklarını her renderda değiştirmesin.
+  const onUnreachableRef = useRef(onUnreachable);
+  useEffect(() => {
+    onUnreachableRef.current = onUnreachable;
+  }, [onUnreachable]);
+
+  const detected = detectEngine(sourceUrl ?? src);
+  const swapped = engineOverride?.src === src;
+  const engine = swapped ? engineOverride.engine : detected;
+
   // Yeni yayına geçildiğinde deneme sayacı sıfırlanır; aksi halde önceki
   // kanalda tükenen hak yeni kanalı da anında hataya düşürür.
   useEffect(() => {
     autoRetries.current = 0;
+    hasPlayed.current = false;
   }, [src]);
 
   useEffect(() => {
@@ -47,15 +109,42 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
         setAttempt((value) => value + 1);
         return;
       }
+      // Doğrudan kipte CORS engeli de ağ hatası gibi görünür. Sayfaya haber ver;
+      // proxy'ye düşerse `src` değişir ve efekt yeniden kurulur.
+      onUnreachableRef.current?.();
       fail(text);
     }
 
-    async function start() {
-      const engine = detectEngine(src);
+    /**
+     * Konteyner yanlış tanınmış olabilir: diğer motorla BİR KEZ dener.
+     *
+     * Özgün planda motor yedeklemesi "spekülatif" diye ertelenmişti; artık
+     * değil. Sahibin sağlayıcısı uzantısız canlı adreslerde ham MPEG-TS
+     * (`video/mp2t`) sunuyor, yani adres biçiminden yapılan tahmin ölçülebilir
+     * biçimde yanılabiliyor. Bu yüzden çalışma anında yedek motor gerekiyor.
+     *
+     * Döngü güvenliği: takas yalnızca `engineOverride` bu `src` için henüz
+     * yazılmamışken yapılır; yazıldıktan sonra aynı yayında bir daha giremez.
+     */
+    function swapEngine(text: string) {
+      if (disposed) return;
+      const alternative = fallbackEngine(engine);
+      if (alternative === null || swapped) {
+        fail(text);
+        return;
+      }
+      // Yeni motora temiz bir yeniden deneme hakkı ver.
+      autoRetries.current = 0;
+      setEngineOverride({ src, engine: alternative });
+    }
 
+    async function start() {
       if (engine === "native") {
-        const onNativeError = () =>
+        const onNativeError = () => {
+          // Doğrudan kipte CORS engeli burada da biçim hatası gibi görünür.
+          onUnreachableRef.current?.();
           fail("Bu dosya biçimi tarayıcıda oynatılamıyor.");
+        };
         vid.src = src;
         vid.addEventListener("error", onNativeError);
         cleanup = () => {
@@ -69,8 +158,7 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
       if (engine === "hls") {
         // Safari HLS'i kendi oynatır; hls.js'e gerek yok.
         if (vid.canPlayType("application/vnd.apple.mpegurl")) {
-          const onSafariError = () =>
-            retryOrFail("Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.");
+          const onSafariError = () => retryOrFail(MSG_UNREACHABLE);
           vid.src = src;
           vid.addEventListener("error", onSafariError);
           cleanup = () => {
@@ -95,14 +183,27 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
           hls.attachMedia(vid);
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
+            const details = String(data.details);
+
+            // Codec hatası motor takasıyla çözülmez — ayrı yolda kalır.
+            if (isCodecError("hls", details)) {
+              fail(MSG_CODEC);
+              return;
+            }
+
+            // Manifest ayrıştırılamadı/yüklenemedi: kaynak muhtemelen HLS değil.
+            if (isContainerMismatch("hls", details) && !hasPlayed.current) {
+              swapEngine(MSG_UNREACHABLE);
+              return;
+            }
+
             if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              retryOrFail(
-                "Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabilir.",
-              );
+              retryOrFail(MSG_UNREACHABLE);
             } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-              fail(
-                "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).",
-              );
+              // İlk yüklemede gelen ölümcül medya hatası: konteyner yanlış
+              // tanınmış olabilir. Oynatma başladıysa gerçek codec sorunudur.
+              if (hasPlayed.current) fail(MSG_CODEC);
+              else swapEngine(MSG_CODEC);
             } else {
               fail("Yayın açılamadı.");
             }
@@ -125,18 +226,35 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
 
         player = mpegts.createPlayer({
           type: "mpegts",
-          isLive: true,
+          // Yalnızca canlı yayında canlı kip. Film ve bölümlerde `false`
+          // olmalı ki arama çubuğu çalışsın — `/api/stream` bu yüzden
+          // `Range` başlığını sağlayıcıya iletiyor.
+          isLive: kind === "live",
           url: src,
         });
         player.attachMediaElement(vid);
         player.load();
         player.on(
           mpegts.Events.ERROR,
-          (errorType: string) => {
+          (errorType: string, errorDetail: string) => {
+            // Codec hatası motor takasıyla çözülmez — ayrı yolda kalır.
+            if (isCodecError("mpegts", errorDetail)) {
+              fail(MSG_CODEC);
+              return;
+            }
+
+            // Veri MPEG-TS olarak ayrıştırılamadı: kaynak muhtemelen HLS.
+            if (
+              isContainerMismatch("mpegts", errorDetail) &&
+              !hasPlayed.current
+            ) {
+              swapEngine(MSG_UNREACHABLE);
+              return;
+            }
+
             if (errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
-              fail(
-                "Yayın çözülemedi. Görüntü veya ses codec'i tarayıcıda desteklenmiyor olabilir (H.265/AC3).",
-              );
+              if (hasPlayed.current) fail(MSG_CODEC);
+              else swapEngine(MSG_CODEC);
             } else {
               retryOrFail("Yayın kesildi veya kaynak yanıt vermiyor.");
             }
@@ -156,10 +274,13 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
       disposed = true;
       cleanup();
     };
-  }, [src, attempt]);
+  }, [src, attempt, engine, swapped, kind]);
 
   function handleManualRetry() {
     autoRetries.current = 0;
+    hasPlayed.current = false;
+    // Elle denemede tespit edilen motora dön; kullanıcı baştan başlatıyor.
+    setEngineOverride(null);
     setAttempt((value) => value + 1);
   }
 
@@ -171,7 +292,10 @@ export function VideoPlayer({ src, title }: { src: string; title?: string }) {
         autoPlay
         playsInline
         title={title}
-        onPlaying={() => setStatus("ready")}
+        onPlaying={() => {
+          hasPlayed.current = true;
+          setStatus("ready");
+        }}
         className="h-full w-full"
       />
 

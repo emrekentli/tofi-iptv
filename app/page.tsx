@@ -67,6 +67,13 @@ export default function HomePage() {
     selectedIdRef.current = selected?.id ?? null;
   }, [selected]);
 
+  // Seçili kanalın kendisi; onUnreachable geri çağrısı stale closure olmadan erişir.
+  const selectedChannelRef = useRef<Channel | null>(null);
+  // Yayın doğrudan sağlayıcıdan mı çekiliyor (proxy yerine)?
+  const directModeRef = useRef(false);
+  // Proxy'ye düşmenin denendiği kanal id'si; kanal başına yalnızca bir kez.
+  const proxyFallbackRef = useRef<string | null>(null);
+
   // I1: Aktif playlist id'sini ve aktif sekmeyi ref'e yansıt; loadTab içinde stale sonuç
   // kontrolü için. switchPlaylist / activateTab tarafından synchronous olarak yazılır.
   const activePlaylistIdRef = useRef<string | null>(null);
@@ -148,6 +155,7 @@ export default function HomePage() {
     setSrc(null);
     setSignError(null);
     selectedIdRef.current = null;
+    selectedChannelRef.current = null;
     setActiveChannels(null);
     setActiveTab("live");
 
@@ -176,23 +184,8 @@ export default function HomePage() {
     }
   }
 
-  // Hızlı kanal değişiminde eski isteğin geç dönüp yeni kanalı ezmemesi için,
-  // dönen yanıtı uygulamadan önce seçimin hâlâ aynı kanal olduğunu doğrula.
-  const handleSelect = useCallback(async (channel: Channel) => {
-    // id'yi anında ref'e yaz; useEffect bir sonraki tick'te çalışır ama
-    // async isteğin geri dönüşü her zaman ondan sonradır.
-    selectedIdRef.current = channel.id;
-    setSelected(channel);
-    setSrc(null);
-    setSignError(null);
-
-    if (!proxyGerekli(channel.url)) {
-      // Sağlayıcı CORS başlığı gönderiyor; tarayıcı doğrudan çekebilir.
-      if (selectedIdRef.current !== channel.id) return;
-      setSrc(channel.url);
-      return;
-    }
-
+  /** Adresi /api/sign ile imzalayıp oynatıcıya verir (proxy kipi). */
+  const signAndPlay = useCallback(async (channel: Channel) => {
     try {
       const response = await fetch("/api/sign", {
         method: "POST",
@@ -219,6 +212,53 @@ export default function HomePage() {
     }
   }, []);
 
+  // Hızlı kanal değişiminde eski isteğin geç dönüp yeni kanalı ezmemesi için,
+  // dönen yanıtı uygulamadan önce seçimin hâlâ aynı kanal olduğunu doğrula.
+  const handleSelect = useCallback(async (channel: Channel) => {
+    // id'yi anında ref'e yaz; useEffect bir sonraki tick'te çalışır ama
+    // async isteğin geri dönüşü her zaman ondan sonradır.
+    selectedIdRef.current = channel.id;
+    selectedChannelRef.current = channel;
+    proxyFallbackRef.current = null;
+    setSelected(channel);
+    setSrc(null);
+    setSignError(null);
+
+    if (!proxyGerekli(channel.url)) {
+      // Sağlayıcının CORS başlığı gönderdiğini VARSAYIYORUZ; göndermiyorsa
+      // oynatıcı hata verir ve handleUnreachable proxy'ye düşer.
+      directModeRef.current = true;
+      if (selectedIdRef.current !== channel.id) return;
+      setSrc(channel.url);
+      return;
+    }
+
+    directModeRef.current = false;
+    await signAndPlay(channel);
+  }, [signAndPlay]);
+
+  /**
+   * Doğrudan kipte yayın açılamadı. En olası sebep sağlayıcının CORS başlığı
+   * göndermemesi — tarayıcı isteği engeller ve bu ağ hatası gibi görünür.
+   * Kullanıcıdan NEXT_PUBLIC_FORCE_PROXY ayarlamasını beklemek yerine
+   * kanal başına BİR KEZ otomatik olarak proxy'ye düşülür.
+   */
+  const handleUnreachable = useCallback(() => {
+    const channel = selectedChannelRef.current;
+    if (!channel) return;
+    // Zaten proxy'deysek yapacak bir şey yok; hata gerçek.
+    if (!directModeRef.current) return;
+    // Bu kanal için bir kez denendi — döngüye girme.
+    if (proxyFallbackRef.current === channel.id) return;
+    // Kullanıcı bu arada başka kanala geçtiyse karışma.
+    if (selectedIdRef.current !== channel.id) return;
+
+    proxyFallbackRef.current = channel.id;
+    directModeRef.current = false;
+    setSignError(null);
+    void signAndPlay(channel);
+  }, [signAndPlay]);
+
   // Playlist başarıyla yüklenince listeye ekle ve aktif hale getir.
   async function handleLoaded(playlist: Playlist, skipped?: number) {
     // Playlist listesini yenile.
@@ -237,6 +277,7 @@ export default function HomePage() {
     setSrc(null);
     setSignError(null);
     selectedIdRef.current = null;
+    selectedChannelRef.current = null;
     // I1: Ref'leri synchronous olarak güncelle.
     activePlaylistIdRef.current = playlist.id;
     activeTabRef.current = "live";
@@ -284,6 +325,8 @@ export default function HomePage() {
       setSrc(null);
       setSignError(null);
       selectedIdRef.current = null;
+    selectedChannelRef.current = null;
+      selectedChannelRef.current = null;
       setKindCounts({ live: 0, movie: 0, series: 0 });
       setShowForm(true);
       return;
@@ -296,6 +339,8 @@ export default function HomePage() {
       setSrc(null);
       setSignError(null);
       selectedIdRef.current = null;
+    selectedChannelRef.current = null;
+      selectedChannelRef.current = null;
       // I1: Ref'leri synchronous olarak güncelle.
       activePlaylistIdRef.current = next.id;
       activeTabRef.current = "live";
@@ -338,9 +383,15 @@ export default function HomePage() {
 
   // Hiç playlist yok veya form açık — playlist formu göster
   if ((playlists ?? []).length === 0 || showForm) {
+    // Vazgeç yalnızca dönülecek bir playlist varsa verilir; aksi halde
+    // form tek ekrandır. Yanlışlıkla "+" basan kullanıcı mahsur kalmasın.
+    const canCancel = (playlists ?? []).length > 0;
     return (
       <div className="flex h-dvh items-center justify-center px-4">
-        <PlaylistForm onLoaded={handleLoaded} />
+        <PlaylistForm
+          onLoaded={handleLoaded}
+          onCancel={canCancel ? () => setShowForm(false) : undefined}
+        />
       </div>
     );
   }
@@ -474,7 +525,17 @@ export default function HomePage() {
           {src ? (
             <div className="flex h-full items-center justify-center">
               <div className="w-full max-w-5xl px-4 py-4 lg:px-6 lg:py-6">
-                <VideoPlayer src={src} title={selected?.name} />
+                {/* sourceUrl: motor tespiti ham adres üzerinden yapılmalı —
+                    `src` proxy adresi olduğunda token şifreli olduğu için
+                    uzantı görünmez ve canlı yayınlar yanlış motora düşer.
+                    kind: yalnızca canlıda mpegts.js canlı kipi (arama çubuğu). */}
+                <VideoPlayer
+                  src={src}
+                  sourceUrl={selected?.url}
+                  kind={selected?.kind}
+                  title={selected?.name}
+                  onUnreachable={handleUnreachable}
+                />
               </div>
             </div>
           ) : selected ? (

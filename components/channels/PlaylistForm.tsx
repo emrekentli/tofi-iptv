@@ -13,9 +13,15 @@ type Phase =
 
 interface Props {
   onLoaded: (playlist: Playlist, skipped?: number) => void;
+  /**
+   * Vazgeçme yolu. Yalnızca en az bir playlist zaten yüklüyse verilir —
+   * hiç playlist yokken geri dönülecek bir ekran olmadığı için gizlenir.
+   * Verilmezse "Vazgeç" düğmesi çizilmez.
+   */
+  onCancel?: () => void;
 }
 
-export function PlaylistForm({ onLoaded }: Props) {
+export function PlaylistForm({ onLoaded, onCancel }: Props) {
   const urlInputId = useId();
   const nameInputId = useId();
   const errorId = useId();
@@ -198,14 +204,29 @@ export function PlaylistForm({ onLoaded }: Props) {
           {statusText()}
         </p>
 
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-5 font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {isLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
-          {isLoading ? "Yükleniyor…" : "Kanalları yükle"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-5 font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {isLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
+            {isLoading ? "Yükleniyor…" : "Kanalları yükle"}
+          </button>
+
+          {/* Vazgeç: yalnızca geri dönülecek bir playlist varsa gösterilir.
+              Yanlışlıkla "+" düğmesine basan kullanıcı formda mahsur kalmasın. */}
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isLoading}
+              className="inline-flex h-11 items-center justify-center rounded-lg border border-border bg-surface px-5 font-medium text-foreground transition-colors duration-150 hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              Vazgeç
+            </button>
+          )}
+        </div>
       </form>
 
       {/* Güvenlik uyarısı */}

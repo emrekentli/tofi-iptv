@@ -199,7 +199,14 @@ Her ekranda **tek bir birincil buton** olur. Geri kalanı ikincil.
 .input::placeholder { color: var(--color-muted-foreground); }
 ```
 
-Kaynak formundaki şifre alanı `type="password"` + göster/gizle düğmesi.
+Kaynak formunda **ayrı bir şifre alanı yoktur**: abonelik kullanıcı adı ve şifresi
+playlist adresinin (M3U URL) kendi içinde taşınır, ayrı bir alana girilmez. Bu yüzden
+adres alanı `type="url"`'dür ve göster/gizle düğmesi bulunmaz — kullanıcı yapıştırdığı
+adresi düzeltebilmek için tamamını görebilmelidir.
+
+Adres kimlik bilgisi taşıdığından arayüzün başka hiçbir yerinde gösterilmez; playlist
+çubuğunda yalnızca playlist adı görünür.
+
 Etiket her zaman görünür — yalnızca placeholder ile etiketleme yapılmaz.
 
 ### Modal

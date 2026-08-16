@@ -12,7 +12,7 @@ const EPISODE = /S(\d{1,3})E(\d{1,4})/;
 
 /**
  * Kayıt adından dizi adı, sezon ve bölüm numarasını çıkarır.
- * Gerçek playlist'te %94,46 başarı; ayrışmayanlar için null döner
+ * Gerçek playlist'te %96,16 başarı; ayrışmayanlar için null döner
  * ve arayüzde "Diğer" başlığı altında toplanır (kaybolmaz).
  */
 export function parseSeriesInfo(name: string): SeriesInfo | null {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Trash2, X, Check } from "lucide-react";
+import { Plus, Trash2, X, Check, AlertTriangle } from "lucide-react";
 import type { Playlist } from "@/lib/types";
 
 interface Props {
@@ -73,6 +73,18 @@ export function PlaylistBar({ playlists, activeId, onSelect, onAdd, onRemove }: 
               >
                 {pl.name}
               </button>
+
+              {/* Adresi kurtarılamayan (sürüm 1'den taşınan) playlist:
+                  yenilenemez, kullanıcının adresi yeniden girmesi gerekir. */}
+              {pl.needsReimport && (
+                <span
+                  title="Bu playlist'in adresi kayıp; yenilenemez. Kanalları güncellemek için playlist'i yeniden ekleyin."
+                  className="mr-1 flex shrink-0 items-center gap-1 rounded bg-surface-raised px-1.5 py-0.5 text-xs text-muted-foreground"
+                >
+                  <AlertTriangle aria-hidden className="size-3" />
+                  <span>Yeniden ekleyin</span>
+                </span>
+              )}
 
               {/* Aktif playlist silme düğmesi */}
               {isActive && pendingDelete !== pl.id && (
