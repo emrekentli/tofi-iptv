@@ -16,6 +16,8 @@ interface Props {
   channels: Channel[];
   selectedId: string | null;
   onSelect: (channel: Channel) => void;
+  /** Kategori sütununda seçili grup; boş dize "Tümü" demektir. */
+  selectedGroup: string;
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -37,7 +39,7 @@ type EpisodeRow =
   | { type: "season"; label: string; key: string }
   | { type: "episode"; channel: Channel; key: string };
 
-export function SeriesList({ channels, selectedId, onSelect }: Props) {
+export function SeriesList({ channels, selectedId, onSelect, selectedGroup }: Props) {
   // Seviye durumu: null = seviye 1, string = açık dizi başlığı, "other" = Diğer grubu
   const [openSeries, setOpenSeries] = useState<string | "other" | null>(null);
 
@@ -51,6 +53,10 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
     const map = new Map<string, Channel[]>();
     const other: Channel[] = [];
     for (const channel of channels) {
+      // Kategori sütununda bir grup seçiliyse yalnızca o gruptakiler sayılır.
+      // Filtre burada, tek geçişte uygulanır — ayrı bir dizi kopyası çıkarmak
+      // 98.675 kayıtta boşuna tahsis olurdu.
+      if (selectedGroup && channel.group !== selectedGroup) continue;
       if (channel.series) {
         const list = map.get(channel.series.title);
         if (list) list.push(channel);
@@ -69,7 +75,7 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
       episodeCounts.set(title, episodes.length);
     }
     return { map, titles, other, seasonCounts, episodeCounts };
-  }, [channels]);
+  }, [channels, selectedGroup]);
 
   // Seviye 1 arama
   const searchId = useId();

@@ -654,12 +654,15 @@ export default function HomePage() {
               </p>
             ) : activeTab === "series" ? (
               // Dizi sekmesi: iki seviyeli gezinme (dizi → bölüm)
-              // key={activeTab} sekme değişiminde durumu sıfırlar
+              // key sekme VE kategori değişiminde durumu sıfırlar: kategori
+              // değişince açık dizi başka gruba ait kalabilirdi, bileşeni
+              // yeniden bağlamak bunu effect'siz çözer.
               <SeriesList
-                key={activeTab}
+                key={`${activeTab}:${selectedGroup}`}
                 channels={activeChannels}
                 selectedId={selected?.id ?? null}
                 onSelect={handleSelect}
+                selectedGroup={selectedGroup}
               />
             ) : (
               // key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (arama/grup/kaydırma sıfırlanır)
