@@ -6,6 +6,10 @@ describe("detectEngine", () => {
     expect(detectEngine("http://a.example/live/x.m3u8")).toBe("hls");
   });
 
+  it("URL fragment uzantı tespitini bozmaz", () => {
+    expect(detectEngine("http://a.example/x.m3u8#bolum")).toBe("hls");
+  });
+
   it("ts uzantısını MPEG-TS olarak tanır", () => {
     expect(detectEngine("http://a.example/live/x.ts")).toBe("mpegts");
   });
@@ -31,11 +35,19 @@ describe("detectEngine", () => {
     expect(detectEngine(src)).toBe("mpegts");
   });
 
+  it("sağlayıcı adresi doğrudan verildiğinde uzantısından tanır", () => {
+    expect(detectEngine("http://provider.example/live/ch.mkv")).toBe("native");
+  });
+
   it("uzantısız adreslerde HLS varsayar", () => {
     expect(detectEngine("http://a.example/live/12345")).toBe("hls");
   });
 
   it("çözümlenemeyen girdide HLS varsayar", () => {
     expect(detectEngine("")).toBe("hls");
+  });
+
+  it("geçersiz URL girdisinde throw etmez", () => {
+    expect(detectEngine("http://[")).toBe("hls");
   });
 });
