@@ -285,9 +285,9 @@ render edilir. Bu bir optimizasyon değil, çalışması için ön koşuldur.
 
 | Genişlik | Düzen |
 |---|---|
-| < 768px | Tek sütun; oynatıcı üstte sabit, liste altında kayar; alt sekme çubuğu |
-| 768–1023px | Oynatıcı üstte, liste altında 2 sütun ızgara |
-| ≥ 1024px | Sol kenar çubuğu (kanal listesi 320px) + sağda oynatıcı |
+| < 768px | Oynatıcı üstte (40dvh), tek sütun (kategori↔kanal geçişi), üst sekme çubuğu |
+| 768–1279px | Oynatıcı üstte (45dvh), kategori+kanallar altında yan yana |
+| ≥ 1280px | Üç sütun: kategori 200px | kanallar 320px | oynatıcı flex-1 |
 
 `100vh` yerine `100dvh` — mobil tarayıcı çubuğu görünürlüğü düzeni kaydırır.
 Sabit alt çubuk `env(safe-area-inset-bottom)` kadar iç boşluk alır.

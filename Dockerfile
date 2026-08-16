@@ -5,6 +5,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# NEXT_PUBLIC_ değişkenleri derleme anında istemci paketine gömülür;
+# çalışma anında ortam değişkeni olarak vermek işe yaramaz.
+# Bu yüzden docker-compose.yml'den değil, `docker build --build-arg` ile alınır.
+# Değeri değiştirmek imajın yeniden derlenmesini gerektirir.
+ARG NEXT_PUBLIC_FORCE_PROXY=""
+ENV NEXT_PUBLIC_FORCE_PROXY=${NEXT_PUBLIC_FORCE_PROXY}
+
 # Önce bağımlılık dosyalarını kopyala; katman önbelleği maksimuma çıksın.
 COPY package.json package-lock.json ./
 RUN npm ci

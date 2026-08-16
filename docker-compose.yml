@@ -1,6 +1,12 @@
 services:
   tofi-iptv:
-    build: .
+    build:
+      context: .
+      args:
+        # NEXT_PUBLIC_FORCE_PROXY derleme anında istemci paketine gömülür;
+        # çalışma anında ortam değişkeni olarak vermek işe yaramaz.
+        # Değiştirmek için: NEXT_PUBLIC_FORCE_PROXY=1 docker compose up --build
+        NEXT_PUBLIC_FORCE_PROXY: ${NEXT_PUBLIC_FORCE_PROXY:-}
     restart: unless-stopped
 
     ports:
@@ -15,10 +21,6 @@ services:
       # Sunucuda yeniden üretin; geliştirme anahtarını taşımayın.
       # Üretmek için: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
       - TOFI_SECRET=${TOFI_SECRET}
-
-      # İsteğe bağlı: tüm kanalları proxy üzerinden geçirmek isterseniz 1 yapın.
-      # Boş bırakılırsa uygulama otomatik algılar (önce doğrudan, hata olursa proxy).
-      - NEXT_PUBLIC_FORCE_PROXY=${NEXT_PUBLIC_FORCE_PROXY:-}
 
     # /api/health TOFI_SECRET'ı açıkça doğrular ve geçersizse 503 döner.
     # Ana sayfayı yoklamak YETMEZ: requireEnv istek anında çağrıldığı için

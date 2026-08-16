@@ -31,6 +31,9 @@ const MSG_UNREACHABLE = "Yayına ulaşılamıyor. Kaynak yanıt vermiyor olabili
 // Bu bir tarayıcı sınırlamasıdır; kanalda veya uygulamada hata yoktur.
 const MSG_CODEC =
   "Bu yayının görüntü veya ses biçimi tarayıcıda desteklenmiyor. Tarayıcı sınırlamasıdır, kanalda sorun yok.";
+// Codec hatası doğrudan kipte tespit edildi; sunucu üzerinden yeniden deneniyor.
+const MSG_CODEC_PROXY_RETRY =
+  "Ses biçimi doğrudan oynatılamıyor — sunucu üzerinden deneniyor…";
 // Kanal sağlayıcı tarafında kapalı — yeniden deneme anlamsız.
 const MSG_UNAVAILABLE =
   "Bu kanal şu anda yayında değil. Sağlayıcıda kapalı olabilir — listeden başka bir kanal deneyin.";
@@ -56,6 +59,13 @@ interface Props {
    * sayfa buna karşılık proxy'ye düşebilir.
    */
   onUnreachable?: () => void;
+  /**
+   * Doğrudan kipte codec hatası oluştu; proxy'ye yükseltme isteği.
+   * Yalnızca doğrudan kipte ve bu `src` için yalnızca bir kez çağrılır.
+   * Sayfa buna karşılık kanalı proxy üzerinden açar; bu sırada `src` değişir
+   * ve oynatıcı efekti yeniden kurulur.
+   */
+  onCodecProxy?: () => void;
 }
 
 // ---- Yardımcı kancalar ----
@@ -124,6 +134,7 @@ export function VideoPlayer({
   kind,
   title,
   onUnreachable,
+  onCodecProxy,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -150,6 +161,10 @@ export function VideoPlayer({
   useEffect(() => {
     onUnreachableRef.current = onUnreachable;
   }, [onUnreachable]);
+  const onCodecProxyRef = useRef(onCodecProxy);
+  useEffect(() => {
+    onCodecProxyRef.current = onCodecProxy;
+  }, [onCodecProxy]);
 
   const detected = detectEngine(sourceUrl ?? src);
   const swapped = engineOverride?.src === src;
@@ -274,9 +289,17 @@ export function VideoPlayer({
             if (!data.fatal) return;
             const details = String(data.details);
 
-            // Codec hatası motor takasıyla çözülmez — ayrı yolda kalır.
+            // Codec hatası motor takasıyla çözülmez. Doğrudan kipteyken proxy
+            // üzerinden bir kez daha denenebilir (ffmpeg sesi dönüştürür);
+            // proxy kipindeyse veya callback yoksa hata gösterilir.
             if (isCodecError("hls", details)) {
-              fail(MSG_CODEC);
+              if (onCodecProxyRef.current) {
+                setMessage(MSG_CODEC_PROXY_RETRY);
+                setStatus("loading");
+                onCodecProxyRef.current();
+              } else {
+                fail(MSG_CODEC);
+              }
               return;
             }
 
@@ -336,9 +359,17 @@ export function VideoPlayer({
             errorDetail: string,
             errorMessage: { code: number; msg: string } | undefined,
           ) => {
-            // Codec hatası motor takasıyla çözülmez — ayrı yolda kalır.
+            // Codec hatası motor takasıyla çözülmez. Doğrudan kipteyken proxy
+            // üzerinden bir kez daha denenebilir (ffmpeg sesi dönüştürür);
+            // proxy kipindeyse veya callback yoksa hata gösterilir.
             if (isCodecError("mpegts", errorDetail)) {
-              fail(MSG_CODEC);
+              if (onCodecProxyRef.current) {
+                setMessage(MSG_CODEC_PROXY_RETRY);
+                setStatus("loading");
+                onCodecProxyRef.current();
+              } else {
+                fail(MSG_CODEC);
+              }
               return;
             }
 

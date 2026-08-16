@@ -1,0 +1,30 @@
+# Geliştirme ortamı yapıları — builder aşamasında `npm ci` bunları yeniden oluşturur.
+# Windows'tan kopyalanan node_modules Alpine imajıyla uyumsuz olduğundan kesinlikle hariç tutulur.
+node_modules/
+
+# Önceki derleme çıktısı — temiz üretim derlemesi için zorunlu.
+.next/
+
+# Git geçmişi imaja gömülmemelidir; boyutu şişirir.
+.git/
+.gitignore
+
+# Gizli değerler — derleme katmanına sızmamalıdır.
+# TOFI_SECRET çalışma anında ortam değişkeniyle verilir, asla imaja gömülmez.
+.env.local
+.env*.local
+.env
+
+# Geliştirme araçları ve belgeler
+.superpowers/
+docs/
+design-system/
+deploy/
+*.md
+!README.md
+
+# Editör ve işletim sistemi kalıntıları
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db

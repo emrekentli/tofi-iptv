@@ -59,17 +59,28 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
       return;
     }
 
-    // Akışı okurken indirilen bayt sayısını raporla
+    // Akışı okurken indirilen bayt sayısını raporla.
+    // 40 MB playlist'te her chunk ~16 KB → ~2500 mesaj; ana iş parçacığını
+    // gereksiz yere yormaması için ilerleme 250 KB'de bir bildirilir.
+    const PROGRESS_INTERVAL = 250 * 1024;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const chunks: string[] = [];
     let loaded = 0;
+    let lastReported = 0;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       loaded += value.byteLength;
       chunks.push(decoder.decode(value, { stream: true }));
+      if (loaded - lastReported >= PROGRESS_INTERVAL) {
+        lastReported = loaded;
+        self.postMessage({ phase: "downloading", loaded } satisfies WorkerOutMessage);
+      }
+    }
+    // Son bayt miktarını bildir (döngüde raporlanmamış olabilir).
+    if (loaded > lastReported) {
       self.postMessage({ phase: "downloading", loaded } satisfies WorkerOutMessage);
     }
     // Kalan baytları temizle

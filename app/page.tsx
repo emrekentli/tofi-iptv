@@ -75,9 +75,16 @@ export default function HomePage() {
   // Seçili kanalın kendisi; onUnreachable geri çağrısı stale closure olmadan erişir.
   const selectedChannelRef = useRef<Channel | null>(null);
   // Yayın doğrudan sağlayıcıdan mı çekiliyor (proxy yerine)?
+  // State: render'da kullanılır (onCodecProxy callback'i koşullu sağlamak için).
+  // Ref: async callback'lerde ve efekt temizleme döngüsünde stale closure olmadan erişir.
+  const [directMode, setDirectMode] = useState(false);
   const directModeRef = useRef(false);
   // Proxy'ye düşmenin denendiği kanal id'si; kanal başına yalnızca bir kez.
   const proxyFallbackRef = useRef<string | null>(null);
+  // Codec hatası nedeniyle proxy'ye yükseltmenin denendiği src; src başına bir kez.
+  // State: render'da kullanılır. Ref: async callback'lerde stale closure olmadan.
+  const [codecProxyTried, setCodecProxyTried] = useState<string | null>(null);
+  const codecProxyTriedRef = useRef<string | null>(null);
 
   // I1: Aktif playlist id'sini ve aktif sekmeyi ref'e yansıt; loadTab içinde stale sonuç
   // kontrolü için. switchPlaylist / activateTab tarafından synchronous olarak yazılır.
@@ -231,6 +238,8 @@ export default function HomePage() {
     selectedIdRef.current = channel.id;
     selectedChannelRef.current = channel;
     proxyFallbackRef.current = null;
+    codecProxyTriedRef.current = null;
+    setCodecProxyTried(null);
     setSelected(channel);
     setSrc(null);
     setSignError(null);
@@ -239,12 +248,14 @@ export default function HomePage() {
       // Sağlayıcının CORS başlığı gönderdiğini VARSAYIYORUZ; göndermiyorsa
       // oynatıcı hata verir ve handleUnreachable proxy'ye düşer.
       directModeRef.current = true;
+      setDirectMode(true);
       if (selectedIdRef.current !== channel.id) return;
       setSrc(channel.url);
       return;
     }
 
     directModeRef.current = false;
+    setDirectMode(false);
     await signAndPlay(channel);
   }, [signAndPlay]);
 
@@ -266,6 +277,38 @@ export default function HomePage() {
 
     proxyFallbackRef.current = channel.id;
     directModeRef.current = false;
+    setDirectMode(false);
+    setSignError(null);
+    void signAndPlay(channel);
+  }, [signAndPlay]);
+
+  /**
+   * Doğrudan kipte codec hatası oluştu; proxy üzerinden yeniden dener.
+   *
+   * Motor takasından farklı: motor takası oynatıcı içinde kalır ve aynı `src`yi
+   * farklı bir kütüphaneyle açar. Codec proxy yükseltmesi ise `src`yi değiştirir:
+   * ham adres yerine /api/stream/sign+stream üzerinden gider; böylece ffmpeg sesi
+   * AAC'ye dönüştürür ve tarayıcı açabilir.
+   *
+   * Sıralama zorunlu: motor takası ilk olur (VideoPlayer içinde). Yalnızca swap
+   * da işe yaramazsa onCodecProxy çağrılır. Bu yüzden callback yalnızca iki
+   * koşulda sağlanır: doğrudan kip ve bu `src` için daha önce denenmemiş olması.
+   */
+  const handleCodecProxy = useCallback(() => {
+    const channel = selectedChannelRef.current;
+    if (!channel) return;
+    // Zaten proxy kipteyse callback sağlanmamış olmalı; gene de koruma.
+    if (!directModeRef.current) return;
+    // Bu src için daha önce denendiyse döngüye girme.
+    const currentSrc = channel.url;
+    if (codecProxyTriedRef.current === currentSrc) return;
+    // Kullanıcı bu arada başka kanala geçtiyse karışma.
+    if (selectedIdRef.current !== channel.id) return;
+
+    codecProxyTriedRef.current = currentSrc;
+    setCodecProxyTried(currentSrc);
+    directModeRef.current = false;
+    setDirectMode(false);
     setSignError(null);
     void signAndPlay(channel);
   }, [signAndPlay]);
@@ -338,7 +381,6 @@ export default function HomePage() {
       setSrc(null);
       setSignError(null);
       selectedIdRef.current = null;
-    selectedChannelRef.current = null;
       selectedChannelRef.current = null;
       setKindCounts({ live: 0, movie: 0, series: 0 });
       setShowForm(true);
@@ -352,7 +394,6 @@ export default function HomePage() {
       setSrc(null);
       setSignError(null);
       selectedIdRef.current = null;
-    selectedChannelRef.current = null;
       selectedChannelRef.current = null;
       // I1: Ref'leri synchronous olarak güncelle.
       activePlaylistIdRef.current = next.id;
@@ -532,6 +573,14 @@ export default function HomePage() {
                   kind={selected?.kind}
                   title={selected?.name}
                   onUnreachable={handleUnreachable}
+                  onCodecProxy={
+                    /* Yalnızca doğrudan kipte ve bu src için ilk kez sağlanır.
+                       Proxy kipteyse veya daha önce denendiyse undefined geçilir;
+                       VideoPlayer codec hatasında doğrudan MSG_CODEC gösterir. */
+                    directMode && codecProxyTried !== (selected?.url ?? "")
+                      ? handleCodecProxy
+                      : undefined
+                  }
                 />
               </div>
             </div>
@@ -630,20 +679,24 @@ export default function HomePage() {
               "xl:flex xl:w-[320px] xl:shrink-0",
             ].join(" ")}
           >
-            {/* Mobil geri düğmesi — yalnızca <768px */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
-              <button
-                type="button"
-                onClick={() => setMobilePane("category")}
-                aria-label="Kategori listesine geri dön"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-raised text-foreground transition-colors duration-150 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-              >
-                <ArrowLeft aria-hidden className="size-4" />
-              </button>
-              <span className="truncate text-sm font-medium text-muted-foreground">
-                {selectedGroup || "Tümü"}
-              </span>
-            </div>
+            {/* Mobil geri düğmesi — yalnızca <768px ve dizi sekmesi dışında.
+                Dizi sekmesinde SeriesList kendi geri düğmesini barındırır;
+                buradaki çubuk görünse iki ayrı geri düğmesi üst üste gelir. */}
+            {activeTab !== "series" && (
+              <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("category")}
+                  aria-label="Kategori listesine geri dön"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-raised text-foreground transition-colors duration-150 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                >
+                  <ArrowLeft aria-hidden className="size-4" />
+                </button>
+                <span className="truncate text-sm font-medium text-muted-foreground">
+                  {selectedGroup || "Tümü"}
+                </span>
+              </div>
+            )}
 
             {loadingChannels || activeChannels === null ? (
               <p

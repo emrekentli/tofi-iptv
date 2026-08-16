@@ -7,6 +7,21 @@ import { detectEngine } from "@/lib/stream-type";
 import { probeCodecs, type TsCodecs } from "@/lib/ts-probe";
 import { needsAudioTranscode, spawnAudioTranscoder } from "@/lib/transcode";
 
+/**
+ * Eşzamanlı ffmpeg süreci sayısı tavanı.
+ *
+ * Her transcode bağlantısı bir ffmpeg süreci çatalar. Açık uç nokta kötüye
+ * kullanılırsa PMT'de H.264+MP2 bildiren sahte isteklerle süreç sayısı sınırsız
+ * büyür. Bu sayacı aşan bağlantılar transcode EDİLMEDEN geçirilir (ffmpeg
+ * yokken zaten bu yola girilir) — reddedilmez, sesi yanlış çıkabilir.
+ *
+ * Eşzamanlı /api/stream bağlantı sayısını da burada sınırlamak değerlendirildi.
+ * Sonuç: HLS segmentleri sık sık paralel olarak istenir; bağlantı tavanı meşru
+ * HLS oynatmayı da bozur. Bu yüzden yalnızca transcode süreçleri sınırlanır.
+ */
+const MAX_CONCURRENT_TRANSCODERS = 4;
+let activeTranscoders = 0;
+
 /** Upstream'e iletilecek istek başlıkları. Range, VOD'da ileri sarma için şart. */
 const FORWARD_REQUEST_HEADERS = ["range", "user-agent"];
 
@@ -260,6 +275,11 @@ async function transcodedBody(
 /**
  * Gövdenin başını inceleyip gerekiyorsa sesi transcode ederek yanıtı kurar.
  * Tespit sonuçsuz kalırsa veya ffmpeg yoksa akış olduğu gibi geçirilir.
+ *
+ * Range isteği transcode ile uyumsuz: ffmpeg akışı baştan alır ve bayt
+ * aralığını koruyamaz — oynatıcı yanlış konuma atlar. Bu yüzden Range başlığı
+ * varsa (VOD arama) transcode atlanır ve akış olduğu gibi iletilir.
+ * Ses yanlış çıkabilir ama sarma/ileri-geri çalışmaya devam eder — tercih bu.
  */
 async function streamWithOptionalTranscode(
   request: Request,
@@ -283,22 +303,72 @@ async function streamWithOptionalTranscode(
     );
   }
 
-  if (needsAudioTranscode(probed.codecs)) {
-    const transcoded = await transcodedBody(
-      request,
-      probed.head,
-      reader,
-      probed.upstreamDone,
-    );
-    if (transcoded !== null) {
-      // Uzunluk ve bayt aralıkları artık kaynaktakiyle örtüşmüyor.
-      headers.delete("content-length");
-      headers.delete("content-range");
-      headers.delete("accept-ranges");
-      headers.set("content-type", "video/mp2t");
-      return new Response(transcoded, { status: 200, headers });
+  // Range isteğinde transcode atlanır: bayt aralığı korunamaz.
+  const isRangeRequest = request.headers.has("range");
+
+  if (!isRangeRequest && needsAudioTranscode(probed.codecs)) {
+    if (activeTranscoders >= MAX_CONCURRENT_TRANSCODERS) {
+      // Tavan doldu: transcode atlanır, akış olduğu gibi geçirilir.
+      // URL loglanmaz — abonelik kimlik bilgisi taşıyor olabilir.
+      console.warn(
+        `Transcode tavanına ulaşıldı (${MAX_CONCURRENT_TRANSCODERS}); akış transcode edilmeden geçiriliyor.`,
+      );
+    } else {
+      activeTranscoders++;
+      let transcoded: ReadableStream<Uint8Array> | null = null;
+      try {
+        transcoded = await transcodedBody(
+          request,
+          probed.head,
+          reader,
+          probed.upstreamDone,
+        );
+      } finally {
+        if (transcoded === null) {
+          // transcodedBody null döndü (ffmpeg yoksa veya başlatılamadıysa).
+          // Sayacı hemen düşür; akış aşağıda olduğu gibi geçirilir.
+          activeTranscoders--;
+        } else {
+          // ffmpeg başladı; process kapanınca sayacı düşür.
+          // transcodedBody içindeki stop() her kapanışta çağrılır,
+          // ama burada sayacı yönetmek daha güvenli.
+          transcoded = ((): ReadableStream<Uint8Array> => {
+            const inner = transcoded!;
+            const reader2 = inner.getReader();
+            return new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                try {
+                  const { done, value } = await reader2.read();
+                  if (done) {
+                    controller.close();
+                    activeTranscoders--;
+                    return;
+                  }
+                  if (value !== undefined && value.length > 0)
+                    controller.enqueue(value);
+                } catch (error) {
+                  activeTranscoders--;
+                  controller.error(error);
+                }
+              },
+              cancel(reason) {
+                activeTranscoders--;
+                void reader2.cancel(reason).catch(() => {});
+              },
+            });
+          })();
+        }
+      }
+      if (transcoded !== null) {
+        // Uzunluk ve bayt aralıkları artık kaynaktakiyle örtüşmüyor.
+        headers.delete("content-length");
+        headers.delete("content-range");
+        headers.delete("accept-ranges");
+        headers.set("content-type", "video/mp2t");
+        return new Response(transcoded, { status: 200, headers });
+      }
+      // ffmpeg yok: sessiz oynayan bir yayın, hiç oynamayandan iyidir.
     }
-    // ffmpeg yok: sessiz oynayan bir yayın, hiç oynamayandan iyidir.
   }
 
   return new Response(

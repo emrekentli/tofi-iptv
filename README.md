@@ -57,10 +57,19 @@ Boş bırakılırsa (varsayılan) uygulama otomatik davranır:
 - Sayfa HTTPS, yayın HTTP ise → proxy zorunlu (tarayıcı karışık içeriği engeller).
 - Aksi hâlde önce **doğrudan** sağlayıcıdan çekilir; sunucudan video trafiği
   geçmez ve gecikme düşer.
-- Doğrudan çekim başarısız olursa (sağlayıcı CORS başlığı göndermiyorsa) uygulama
-  o kanal için **otomatik olarak bir kez proxy'ye düşer**. Yani bu değişkeni
-  normalde elle ayarlamanız gerekmez; sağlayıcınız CORS göndermiyorsa ve her
-  kanalda ilk denemenin boşa gitmesini istemiyorsanız `1` yapın.
+- Doğrudan çekim başarısız olursa (sağlayıcı CORS başlığı göndermiyorsa veya ses
+  codec'i tarayıcının çözemediği bir formattaysa) uygulama o kanal için
+  **otomatik olarak bir kez proxy'ye düşer**. Yani bu değişkeni normalde elle
+  ayarlamanız gerekmez; sağlayıcınız CORS göndermiyorsa ve her kanalda ilk
+  denemenin boşa gitmesini istemiyorsanız `1` yapın.
+
+**Önemli:** Bu değişken istemci paketine **derleme anında** gömülür. Docker'da
+ortam değişkeni olarak vermek işe yaramaz — değiştirmek için imajı yeniden
+derleyin:
+
+```bash
+NEXT_PUBLIC_FORCE_PROXY=1 docker compose up --build
+```
 
 ---
 
@@ -132,7 +141,9 @@ Sunucu tarafında yine de bulunan korumalar (bunlar kimlik doğrulamanın yerini
 
 - SSRF koruması — özel/yerel ağ adreslerine istek yapılamaz (`lib/safe-url.ts`).
 - İçerik türü beyaz listesi — proxy yalnızca medya döndürür, HTML/JSON döndürmez.
-- Eşzamanlılık ve boyut sınırları, zaman aşımları.
+- Eşzamanlılık ve boyut sınırları, zaman aşımları — `/api/playlist` üzerinde.
+  `/api/stream` için eşzamanlı transcode süreç sayısı sınırlıdır; ham bağlantı
+  sayısı sınırlanmaz.
 - Güvenlik başlıkları: `nosniff`, `sandbox` CSP, çerçevelemeye kapalı.
 
 ---
@@ -163,7 +174,7 @@ design-system/          Tasarım kuralları (MASTER.md)
 
 ### Neden HTTP, HTTPS değil?
 
-Bu uygulama **bilinçli olarak düz HTTP üzerinde** çalışır. Sebebi bantbant genişliği ve maliyet:
+Bu uygulama **bilinçli olarak düz HTTP üzerinde** çalışır. Sebebi bant genişliği ve maliyet:
 
 IPTV sağlayıcıları yayın adreslerini `http://` ile sunar. Bir HTTPS sayfası
 `http://` içeriği yükleyemez — tarayıcılar bunu "karışık içerik" olarak engeller.
@@ -196,8 +207,9 @@ bilen herkes uygulamayı kullanabilir. Herkese açık bir IP'ye kurarsanız:
 - `/api/stream` proxy'si, imzalı bir token'ı genel amaçlı medya iletimi için
   kullanılabilir.
 
-**Önerilen:** uygulamayı Tailscale / WireGuard VPN arkasında tutun, ya da
-nginx'e HTTP Basic Auth ekleyin.
+**Herkese açık bir IP'ye kuruyorsanız** uygulamayı bir kimlik doğrulama
+katmanının arkasına alın: nginx'te HTTP Basic Auth veya Tailscale / WireGuard VPN.
+Bu olmadan adresi bilen herkes sunucunuzu proxy olarak kullanabilir.
 
 ---
 
@@ -249,6 +261,8 @@ cp .env.example .env
 
 ```bash
 docker compose up -d --build
+# NEXT_PUBLIC_FORCE_PROXY=1 kullanmak istiyorsanız:
+# NEXT_PUBLIC_FORCE_PROXY=1 docker compose up -d --build
 ```
 
 **3. Nginx yapılandırması (aşağıdaki nginx adımına bakın).**
@@ -331,7 +345,8 @@ Video normalde **doğrudan sağlayıcıdan tarayıcıya** akar; sunucu trafiği
 yoktur. Proxy devreye giren durumlar:
 
 - Sağlayıcı CORS başlığı göndermiyorsa (`Access-Control-Allow-Origin` eksik)
-- Ses kodeği tarayıcının desteklemediği bir format ise (MP2, AC-3)
+- Ses kodeği tarayıcının çözemediği bir format ise (MP2, AC-3) —
+  bu durumda sunucu ffmpeg ile sesi AAC'ye çevirir; video kopyalanır
 
 Bu durumlarda sunucu her yayın için ~2–8 Mbit/s geçirir. 10 kişi aynı anda
 proxy üzerinden izlerse ~25–80 Mbit/s sunucu bant genişliği tüketilir ve
