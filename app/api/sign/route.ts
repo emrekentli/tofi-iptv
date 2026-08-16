@@ -1,5 +1,6 @@
 import { requireEnv } from "@/lib/env";
 import { proxyUrl } from "@/lib/sign";
+import { checkPublicUrl } from "@/lib/safe-url";
 
 export async function POST(request: Request): Promise<Response> {
   const secret = requireEnv("TOFI_SECRET");
@@ -15,14 +16,14 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Adres gerekli" }, { status: 400 });
   }
 
-  try {
-    const target = new URL(url.trim());
-    if (target.protocol !== "http:" && target.protocol !== "https:") {
-      return Response.json({ error: "Yalnızca http/https" }, { status: 400 });
-    }
-  } catch {
-    return Response.json({ error: "Adres çözümlenemedi" }, { status: 400 });
+  const trimmed = url.trim();
+
+  // Adresi doğrula: protokol, dahili ağ ve DNS kontrolü
+  const check = await checkPublicUrl(trimmed);
+  if (!check.ok) {
+    // URL hiçbir zaman loglanmaz; kullanıcı adı ve şifre taşıyor olabilir.
+    return Response.json({ error: check.reason }, { status: 400 });
   }
 
-  return Response.json({ src: proxyUrl(url.trim(), secret) });
+  return Response.json({ src: proxyUrl(trimmed, secret) });
 }

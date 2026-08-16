@@ -1,16 +1,24 @@
 import { parseM3U } from "@/lib/sources/m3u";
+import { checkPublicUrl } from "@/lib/safe-url";
 import type { Channel } from "@/lib/types";
 
-/** Playlist'ler büyük olabilir; makul bir tavan koyup belleği koruyoruz. */
-const MAX_BYTES = 200 * 1024 * 1024;
+/** Playlist'ler büyük olabilir; makul bir tavan koyup belleği koruyoruz.
+ *  Gerçek playlist ~40 MB; 80 MB tavan iki katlık bir güvenlik payı sağlar. */
+const MAX_BYTES = 80 * 1024 * 1024;
 
-/** Gövdeyi bayt sayarak okur; sınır aşılırsa akışı iptal edip null döner.
+/** readWithLimit dönüş değeri — null ile "yok" ve "aşıldı" ayrımını sağlar. */
+type ReadResult =
+  | { kind: "ok"; text: string }
+  | { kind: "missing" }
+  | { kind: "too_large" };
+
+/** Gövdeyi bayt sayarak okur; sınır aşılırsa akışı iptal edip too_large döner.
  *  content-length başlığına güvenilemez — chunked yanıtlarda hiç gelmez. */
 async function readWithLimit(
   response: Response,
   maxBytes: number,
-): Promise<string | null> {
-  if (!response.body) return null;
+): Promise<ReadResult> {
+  if (!response.body) return { kind: "missing" };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = "";
@@ -22,11 +30,11 @@ async function readWithLimit(
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      return null;
+      return { kind: "too_large" };
     }
     text += decoder.decode(value, { stream: true });
   }
-  return text + decoder.decode();
+  return { kind: "ok", text: text + decoder.decode() };
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -41,15 +49,16 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Playlist adresi gerekli" }, { status: 400 });
   }
 
-  let target: URL;
-  try {
-    target = new URL(url.trim());
-  } catch {
-    return Response.json({ error: "Adres çözümlenemedi" }, { status: 400 });
+  const trimmed = url.trim();
+
+  // Adresi doğrula: protokol, dahili ağ ve DNS kontrolü
+  const check = await checkPublicUrl(trimmed);
+  if (!check.ok) {
+    // URL hiçbir zaman loglanmaz; kullanıcı adı ve şifre taşıyor olabilir.
+    return Response.json({ error: check.reason }, { status: 400 });
   }
-  if (target.protocol !== "http:" && target.protocol !== "https:") {
-    return Response.json({ error: "Yalnızca http/https desteklenir" }, { status: 400 });
-  }
+
+  const target = check.url;
 
   let response: Response;
   try {
@@ -77,12 +86,15 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const text = await readWithLimit(response, MAX_BYTES);
-  if (text === null) {
+  const result = await readWithLimit(response, MAX_BYTES);
+  if (result.kind === "missing") {
+    return Response.json({ error: "Playlist yanıtında gövde yok" }, { status: 502 });
+  }
+  if (result.kind === "too_large") {
     return Response.json({ error: "Playlist çok büyük" }, { status: 413 });
   }
 
-  const { channels: parsed, skipped } = parseM3U(text);
+  const { channels: parsed, skipped } = parseM3U(result.text);
 
   // Ham adres döndürülür; imzalama istemci isteğinde /api/sign üzerinden yapılır.
   const channels: Channel[] = parsed.map(({ rawUrl, ...rest }) => ({

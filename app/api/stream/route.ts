@@ -1,6 +1,7 @@
 import { isHlsResponse, rewriteHlsPlaylist } from "@/lib/hls-rewrite";
 import { requireEnv } from "@/lib/env";
 import { verify } from "@/lib/sign";
+import { checkPublicUrl } from "@/lib/safe-url";
 
 /** Upstream'e iletilecek istek başlıkları. Range, VOD'da ileri sarma için şart. */
 const FORWARD_REQUEST_HEADERS = ["range", "user-agent"];
@@ -24,6 +25,14 @@ export async function GET(request: Request): Promise<Response> {
   }
   if (!verify(target, sig, secret)) {
     return new Response("Geçersiz imza", { status: 403 });
+  }
+
+  // Gerçek chokepoint: imza geçerli olsa bile URL dahili ağa işaret edemez.
+  // Bu, imzalanmadan önce sızdırılmış veya imzalandıktan sonra değişmiş bir
+  // adresi de engeller. URL hiçbir zaman loglanmaz; şifre taşıyor olabilir.
+  const check = await checkPublicUrl(target);
+  if (!check.ok) {
+    return new Response(check.reason, { status: 400 });
   }
 
   const headers = new Headers();
