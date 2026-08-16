@@ -1,20 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Tv, Film, Clapperboard, RefreshCw, X } from "lucide-react";
-import { loadChannels, clearChannels } from "@/lib/db";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Tv, Film, Clapperboard, X } from "lucide-react";
+import {
+  listPlaylists,
+  removePlaylist,
+  loadChannelsByKind,
+  countByKind,
+} from "@/lib/db";
 import { PlaylistForm } from "@/components/channels/PlaylistForm";
+import { PlaylistBar } from "@/components/channels/PlaylistBar";
 import { ChannelList } from "@/components/channels/ChannelList";
 import { VideoPlayer } from "@/components/player/VideoPlayer";
-import type { Channel } from "@/lib/types";
+import type { Channel, ChannelKind, Playlist } from "@/lib/types";
 
-type TabKind = "live" | "movie" | "series";
+type TabKind = ChannelKind;
 
 const TABS: { kind: TabKind; label: string; icon: React.ElementType }[] = [
   { kind: "live", label: "Canlı", icon: Tv },
   { kind: "movie", label: "Film", icon: Film },
   { kind: "series", label: "Dizi", icon: Clapperboard },
 ];
+
+const ACTIVE_PLAYLIST_KEY = "tofi-active-playlist";
 
 /** Sayfa HTTPS iken HTTP yayın karışık içerik sayılıp engellenir; o durumda
  *  proxy zorunludur. Diğer hallerde tarayıcı doğrudan çekebilir —
@@ -26,61 +34,122 @@ function proxyGerekli(streamUrl: string): boolean {
 }
 
 export default function HomePage() {
-  const [allChannels, setAllChannels] = useState<Channel[] | null>(null);
+  // Playlist listesi — null: henüz yüklenmedi.
+  const [playlists, setPlaylists] = useState<Playlist[] | null>(null);
+  // Aktif playlist id'si.
+  const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
+  // Sekme başına kanal sayıları.
+  const [kindCounts, setKindCounts] = useState<Record<ChannelKind, number>>({ live: 0, movie: 0, series: 0 });
+  // Önbellek: `${playlistId}:${kind}` → Channel[]. Referans kararlılığı için Map.
+  const channelCache = useRef<Map<string, Channel[]>>(new Map());
+  // Aktif sekme için gösterilen kanallar.
+  const [activeChannels, setActiveChannels] = useState<Channel[] | null>(null);
+
   const [dbError, setDbError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKind>("live");
   const [selected, setSelected] = useState<Channel | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [signError, setSignError] = useState<string | null>(null);
   const [skippedNotice, setSkippedNotice] = useState<number | null>(null);
+  // Yükleme durumu: sekme veya playlist değişince gösterilir.
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  // Playlist formu görünür mü?
+  const [showForm, setShowForm] = useState(false);
 
   // Sekme düğmelerine DOM odağı taşımak için ref dizisi
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Seçilen kanalın id'sini ref'e yansıt; stale closure olmadan race condition
-  // kontrolü için. useEffect ile senkronize edilir; render sırasında okunmaz.
+  // kontrolü için. id'yi ilk await'ten ÖNCE synchronous olarak yaz.
   const selectedIdRef = useRef<string | null>(null);
   useEffect(() => {
     selectedIdRef.current = selected?.id ?? null;
   }, [selected]);
 
-  // IndexedDB'yi açılışta yükle.
+  // Belirtilen playlist ve sekme için kanalları yükler; önbellekten varsa alır.
+  const loadTab = useCallback(async (playlistId: string, kind: ChannelKind) => {
+    const cacheKey = `${playlistId}:${kind}`;
+    const cached = channelCache.current.get(cacheKey);
+    if (cached) {
+      setActiveChannels(cached);
+      setLoadingChannels(false);
+      return;
+    }
+    setLoadingChannels(true);
+    try {
+      const channels = await loadChannelsByKind(playlistId, kind);
+      // Önbelleğe al — aynı referans her renderda kullanılır.
+      channelCache.current.set(cacheKey, channels);
+      setActiveChannels(channels);
+    } catch {
+      setDbError("Kanallar yüklenemedi. Tarayıcı depolamasına erişilemedi.");
+    } finally {
+      setLoadingChannels(false);
+    }
+  }, []);
+
+  // Açılışta playlist listesini yükle.
   useEffect(() => {
-    loadChannels()
-      .then((channels) => {
-        setAllChannels(channels);
+    listPlaylists()
+      .then((list) => {
+        setPlaylists(list);
+        if (list.length === 0) return;
+
+        // Son kullanılan playlist'i ya da ilkini seç.
+        const savedId = (() => {
+          try { return localStorage.getItem(ACTIVE_PLAYLIST_KEY); } catch { return null; }
+        })();
+        const initial = list.find((p) => p.id === savedId) ?? list[0]!;
+        setActivePlaylistId(initial.id);
+
+        // Sekme sayılarını yükle (kayıt belleğe alınmaz).
+        countByKind(initial.id)
+          .then(setKindCounts)
+          .catch(() => { /* sayı yüklenemezse sıfır kalır */ });
+
+        // İlk sekmeyi yükle.
+        loadTab(initial.id, "live").catch(() => { /* hata loadTab içinde yönetilir */ });
       })
       .catch(() => {
         setDbError(
           "Tarayıcı depolamasına erişilemedi. Gizli mod veya engellenen depolama alanı olabilir.",
         );
       });
-  }, []);
+  }, [loadTab]);
 
-  // Kanalları kind'a göre üçe böl — her renderda değil, bir kez.
-  const liveChannels = useMemo(
-    () => (allChannels ?? []).filter((c) => c.kind === "live"),
-    [allChannels],
-  );
-  const movieChannels = useMemo(
-    () => (allChannels ?? []).filter((c) => c.kind === "movie"),
-    [allChannels],
-  );
-  const seriesChannels = useMemo(
-    () => (allChannels ?? []).filter((c) => c.kind === "series"),
-    [allChannels],
-  );
+  // Playlist veya sekme değişince kanalları yükle.
+  async function switchPlaylist(id: string) {
+    if (id === activePlaylistId) return;
 
-  function activeChannels(): Channel[] {
-    if (activeTab === "live") return liveChannels;
-    if (activeTab === "movie") return movieChannels;
-    return seriesChannels;
+    // Önbellek ve seçim sıfırla (seçim başka playlist'e ait).
+    setSelected(null);
+    setSrc(null);
+    setSignError(null);
+    selectedIdRef.current = null;
+    setActiveChannels(null);
+    setActiveTab("live");
+
+    setActivePlaylistId(id);
+
+    try {
+      localStorage.setItem(ACTIVE_PLAYLIST_KEY, id);
+    } catch { /* localStorage yoksa devam et */ }
+
+    const counts = await countByKind(id).catch(() => ({ live: 0, movie: 0, series: 0 }));
+    setKindCounts(counts);
+
+    await loadTab(id, "live");
   }
 
-  function tabCount(kind: TabKind): number {
-    if (kind === "live") return liveChannels.length;
-    if (kind === "movie") return movieChannels.length;
-    return seriesChannels.length;
+  function activateTab(kind: TabKind) {
+    const idx = TABS.findIndex((t) => t.kind === kind);
+    setActiveTab(kind);
+    tabRefs.current[idx]?.focus();
+
+    if (activePlaylistId) {
+      setActiveChannels(null);
+      loadTab(activePlaylistId, kind).catch(() => { /* hata loadTab içinde yönetilir */ });
+    }
   }
 
   // Hızlı kanal değişiminde eski isteğin geç dönüp yeni kanalı ezmemesi için,
@@ -95,7 +164,6 @@ export default function HomePage() {
 
     if (!proxyGerekli(channel.url)) {
       // Sağlayıcı CORS başlığı gönderiyor; tarayıcı doğrudan çekebilir.
-      // Sunucudan video trafiği geçmez.
       if (selectedIdRef.current !== channel.id) return;
       setSrc(channel.url);
       return;
@@ -108,7 +176,6 @@ export default function HomePage() {
         body: JSON.stringify({ url: channel.url }),
       });
       if (!response.ok) {
-        // Seçim değiştiyse bu hatayı gösterme.
         if (selectedIdRef.current === channel.id) {
           setSignError(
             "Yayın adresi hazırlanamadı. Tekrar denemek için kanalı seçin.",
@@ -117,7 +184,6 @@ export default function HomePage() {
         return;
       }
       const { src: signedSrc } = await response.json() as { src: string };
-      // Yanıt gecikmeli geldiyse ve kullanıcı başka kanala geçtiyse uygulama.
       if (selectedIdRef.current !== channel.id) return;
       setSrc(signedSrc);
     } catch {
@@ -129,34 +195,90 @@ export default function HomePage() {
     }
   }, []);
 
-  async function handleReset() {
-    await clearChannels();
-    setAllChannels([]);
-    setSelected(null);
-    setSrc(null);
-    setSignError(null);
-    setSkippedNotice(null);
-  }
+  // Playlist başarıyla yüklenince listeye ekle ve aktif hale getir.
+  async function handleLoaded(playlist: Playlist, skipped?: number) {
+    // Playlist listesini yenile.
+    const updated = await listPlaylists().catch(() => playlists ?? []);
+    setPlaylists(updated);
+    setShowForm(false);
 
-  function handleLoaded(channels: Channel[], skipped?: number) {
-    setAllChannels(channels);
+    // Önbelleği temizle — yeni playlist veya yenileme.
+    for (const key of Array.from(channelCache.current.keys())) {
+      if (key.startsWith(`${playlist.id}:`)) {
+        channelCache.current.delete(key);
+      }
+    }
+
     setSelected(null);
     setSrc(null);
     setSignError(null);
+    selectedIdRef.current = null;
+    setActiveTab("live");
+    setActivePlaylistId(playlist.id);
+
+    try {
+      localStorage.setItem(ACTIVE_PLAYLIST_KEY, playlist.id);
+    } catch { /* localStorage yoksa devam et */ }
+
+    const counts = await countByKind(playlist.id).catch(() => ({ live: 0, movie: 0, series: 0 }));
+    setKindCounts(counts);
+    await loadTab(playlist.id, "live");
+
     if (skipped && skipped > 0) {
       setSkippedNotice(skipped);
     }
   }
 
-  function activateTab(kind: TabKind) {
-    const idx = TABS.findIndex((t) => t.kind === kind);
-    setActiveTab(kind);
-    // DOM odağını yeni aktif sekme düğmesine taşı (B4 düzeltmesi)
-    tabRefs.current[idx]?.focus();
+  async function handleRemovePlaylist(id: string) {
+    await removePlaylist(id).catch(() => { /* silme başarısız olursa devam et */ });
+
+    // Önbelleği temizle.
+    for (const key of Array.from(channelCache.current.keys())) {
+      if (key.startsWith(`${id}:`)) {
+        channelCache.current.delete(key);
+      }
+    }
+
+    const updated = await listPlaylists().catch(() => [] as Playlist[]);
+    setPlaylists(updated);
+
+    if (updated.length === 0) {
+      // Hiç playlist kalmadı — formu göster.
+      setActivePlaylistId(null);
+      setActiveChannels(null);
+      setSelected(null);
+      setSrc(null);
+      setSignError(null);
+      selectedIdRef.current = null;
+      setKindCounts({ live: 0, movie: 0, series: 0 });
+      setShowForm(true);
+      return;
+    }
+
+    // Silinen aktifse ilk kalana geç.
+    if (id === activePlaylistId) {
+      const next = updated[0]!;
+      setSelected(null);
+      setSrc(null);
+      setSignError(null);
+      selectedIdRef.current = null;
+      setActiveTab("live");
+      setActivePlaylistId(next.id);
+
+      try {
+        localStorage.setItem(ACTIVE_PLAYLIST_KEY, next.id);
+      } catch { /* localStorage yoksa devam et */ }
+
+      const counts = await countByKind(next.id).catch(() => ({ live: 0, movie: 0, series: 0 }));
+      setKindCounts(counts);
+      await loadTab(next.id, "live");
+    }
   }
 
-  // Yükleniyor durumu
-  if (allChannels === null && dbError === null) {
+  // ---- Render durumları ----
+
+  // Yükleniyor
+  if (playlists === null && dbError === null) {
     return (
       <div className="flex h-dvh items-center justify-center">
         <p className="text-sm text-muted-foreground" aria-live="polite">
@@ -177,8 +299,8 @@ export default function HomePage() {
     );
   }
 
-  // IndexedDB boşsa playlist formunu göster
-  if ((allChannels ?? []).length === 0) {
+  // Hiç playlist yok veya form açık — playlist formu göster
+  if ((playlists ?? []).length === 0 || showForm) {
     return (
       <div className="flex h-dvh items-center justify-center px-4">
         <PlaylistForm onLoaded={handleLoaded} />
@@ -186,12 +308,20 @@ export default function HomePage() {
     );
   }
 
-  // Ana ekran: sekmeli düzen
+  // Ana ekran: çoklu playlist + sekmeli düzen
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
-      {/* Üst çubuk: sekme listesi + playlist değiştir düğmesi */}
+      {/* Playlist çubuğu */}
+      <PlaylistBar
+        playlists={playlists ?? []}
+        activeId={activePlaylistId ?? ""}
+        onSelect={(id) => { switchPlaylist(id).catch(() => { /* hata switchPlaylist içinde yönetilir */ }); }}
+        onAdd={() => setShowForm(true)}
+        onRemove={(id) => { handleRemovePlaylist(id).catch(() => { /* hata handleRemovePlaylist içinde yönetilir */ }); }}
+      />
+
+      {/* Üst çubuk: sekme listesi */}
       <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-3">
-        {/* Sekme listesi */}
         <nav
           role="tablist"
           aria-label="İçerik türü"
@@ -215,7 +345,7 @@ export default function HomePage() {
         >
           {TABS.map(({ kind, label, icon: Icon }, i) => {
             const isActive = activeTab === kind;
-            const count = tabCount(kind);
+            const count = kindCounts[kind];
             return (
               <button
                 key={kind}
@@ -229,8 +359,7 @@ export default function HomePage() {
                   "relative flex min-h-[44px] items-center gap-1.5 px-4 text-sm font-medium transition-colors duration-150",
                   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded-sm",
                   isActive
-                    ? // Aktif sekme: alt çizgi + foreground rengi (yalnızca renkle değil)
-                      "text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-accent"
+                    ? "text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-accent"
                     : "text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
@@ -245,17 +374,6 @@ export default function HomePage() {
             );
           })}
         </nav>
-
-        {/* Playlist değiştir */}
-        <button
-          type="button"
-          onClick={handleReset}
-          aria-label="Playlist'i değiştir"
-          className="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground transition-colors duration-150 hover:bg-surface-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          <RefreshCw aria-hidden className="size-4" />
-          <span className="hidden sm:inline">Playlist değiştir</span>
-        </button>
       </header>
 
       {/* Atlanmış kayıt bildirimi */}
@@ -278,22 +396,31 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Ana içerik: ≥1024px solda liste + sağda oynatıcı; <1024px oynatıcı üstte */}
+      {/* Ana içerik */}
       <div className="flex flex-1 overflow-hidden lg:flex-row flex-col-reverse">
-        {/* Sol: kanal listesi (lg'de 320px sabit, küçükte yarım ekran) */}
+        {/* Sol: kanal listesi */}
         <aside
           id={`tabpanel-${activeTab}`}
           role="tabpanel"
           aria-labelledby={activeTab}
           className="flex flex-col border-r border-border bg-surface lg:w-80 lg:shrink-0 overflow-hidden flex-1 lg:flex-none"
         >
-          {/* key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (B3) */}
-          <ChannelList
-            key={activeTab}
-            channels={activeChannels()}
-            selectedId={selected?.id ?? null}
-            onSelect={handleSelect}
-          />
+          {loadingChannels || activeChannels === null ? (
+            <p
+              className="px-4 py-8 text-center text-sm text-muted-foreground"
+              aria-live="polite"
+            >
+              Kanallar yükleniyor…
+            </p>
+          ) : (
+            // key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (arama/grup/kaydırma sıfırlanır)
+            <ChannelList
+              key={activeTab}
+              channels={activeChannels}
+              selectedId={selected?.id ?? null}
+              onSelect={handleSelect}
+            />
+          )}
         </aside>
 
         {/* Sağ: oynatıcı */}

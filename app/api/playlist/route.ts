@@ -1,6 +1,6 @@
 import { parseM3U } from "@/lib/sources/m3u";
 import { checkPublicUrl } from "@/lib/safe-url";
-import type { Channel } from "@/lib/types";
+import type { RawChannel } from "@/lib/db";
 
 /** Playlist'ler büyük olabilir; makul bir tavan koyup belleği koruyoruz.
  *  Gerçek playlist ~40 MB; 80 MB tavan iki katlık bir güvenlik payı sağlar. */
@@ -97,7 +97,8 @@ export async function POST(request: Request): Promise<Response> {
   const { channels: parsed, skipped } = parseM3U(result.text);
 
   // Ham adres döndürülür; imzalama istemci isteğinde /api/sign üzerinden yapılır.
-  const channels: Channel[] = parsed.map(({ rawUrl, ...rest }) => ({
+  // playlistId istemci tarafında addPlaylist() çağrılırken eklenir.
+  const channels: RawChannel[] = parsed.map(({ rawUrl, ...rest }) => ({
     ...rest,
     url: rawUrl,
   }));

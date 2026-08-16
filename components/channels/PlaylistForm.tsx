@@ -2,8 +2,8 @@
 
 import { Loader2, AlertCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { clearChannels, saveChannels } from "@/lib/db";
-import type { Channel } from "@/lib/types";
+import { addPlaylist, playlistIdFromUrl, type RawChannel } from "@/lib/db";
+import type { Playlist } from "@/lib/types";
 
 type Phase =
   | { kind: "idle" }
@@ -12,14 +12,16 @@ type Phase =
   | { kind: "done" };
 
 interface Props {
-  onLoaded: (channels: Channel[], skipped?: number) => void;
+  onLoaded: (playlist: Playlist, skipped?: number) => void;
 }
 
 export function PlaylistForm({ onLoaded }: Props) {
-  const inputId = useId();
+  const urlInputId = useId();
+  const nameInputId = useId();
   const errorId = useId();
   const statusId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -36,10 +38,10 @@ export function PlaylistForm({ onLoaded }: Props) {
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const url = inputRef.current?.value.trim() ?? "";
+    const url = urlRef.current?.value.trim() ?? "";
     if (!url) {
       setUrlEmpty(true);
-      inputRef.current?.focus();
+      urlRef.current?.focus();
       return;
     }
     setUrlEmpty(false);
@@ -47,13 +49,14 @@ export function PlaylistForm({ onLoaded }: Props) {
     setError(null);
     setPhase({ kind: "downloading" });
 
-    let channels: Channel[];
+    let channels: RawChannel[];
     let skippedCount = 0;
 
     try {
       const res = await fetch("/api/playlist", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        // URL kimlik bilgisi taşır; yalnızca bu uygulamanın kendi sunucusuna gönderilir.
         body: JSON.stringify({ url }),
       });
 
@@ -69,7 +72,7 @@ export function PlaylistForm({ onLoaded }: Props) {
       }
 
       const data = await res.json();
-      channels = data.channels as Channel[];
+      channels = data.channels as RawChannel[];
       skippedCount = typeof data.skipped === "number" ? data.skipped : 0;
     } catch {
       setError("Sunucuya ulaşılamadı. Bağlantınızı kontrol edin.");
@@ -80,18 +83,33 @@ export function PlaylistForm({ onLoaded }: Props) {
     const total = channels.length;
     setPhase({ kind: "writing", written: 0, total });
 
+    // Ad alanı: girilmişse kullan, boşsa adresin host kısmından türet.
+    const nameInput = nameRef.current?.value.trim() ?? "";
+    let playlistName: string;
     try {
-      await saveChannels(channels, (written) => {
+      playlistName = nameInput || new URL(url).host || "Playlist";
+    } catch {
+      playlistName = nameInput || "Playlist";
+    }
+
+    // Playlist kimliği: URL'den kararlı hash — aynı adres iki kez eklenince çoğalmaz.
+    const playlistId = await playlistIdFromUrl(url);
+
+    const playlist: Playlist = {
+      id: playlistId,
+      name: playlistName,
+      url,
+      addedAt: Date.now(),
+      channelCount: total,
+    };
+
+    try {
+      await addPlaylist(playlist, channels, (written) => {
         setPhase({ kind: "writing", written, total });
       });
     } catch {
-      // saveChannels önce clear() çağırır; hata oluşursa veritabanı kısmen
-      // dolu kalabilir. Tutarsız durumu temizle; kullanıcı yeniden dener.
-      try {
-        await clearChannels();
-      } catch {
-        // Temizleme de başarısız olursa sessizce devam et.
-      }
+      // addPlaylist önce varsa kanalları temizler; hata oluşursa kısmen temizlenmiş
+      // olabilir. Kullanıcı yeniden deneye bilir.
       setError(
         "Kanallar kaydedilemedi. Tarayıcı depolama alanı dolu olabilir. Sayfayı yenileyip tekrar deneyin.",
       );
@@ -100,7 +118,7 @@ export function PlaylistForm({ onLoaded }: Props) {
     }
 
     setPhase({ kind: "done" });
-    onLoaded(channels, skippedCount);
+    onLoaded(playlist, skippedCount);
   }
 
   return (
@@ -113,13 +131,30 @@ export function PlaylistForm({ onLoaded }: Props) {
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+        {/* Playlist adı — isteğe bağlı */}
         <div className="flex flex-col gap-2">
-          <label htmlFor={inputId} className="text-sm font-medium text-foreground">
+          <label htmlFor={nameInputId} className="text-sm font-medium text-foreground">
+            Playlist adı <span className="font-normal text-muted-foreground">(isteğe bağlı)</span>
+          </label>
+          <input
+            ref={nameRef}
+            id={nameInputId}
+            type="text"
+            disabled={isLoading}
+            autoComplete="off"
+            placeholder="Örn. Ev Planı"
+            className="h-11 rounded-lg border border-border bg-surface px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text disabled:opacity-50"
+          />
+        </div>
+
+        {/* Playlist adresi — zorunlu, kontrolsüz */}
+        <div className="flex flex-col gap-2">
+          <label htmlFor={urlInputId} className="text-sm font-medium text-foreground">
             Playlist adresi
           </label>
           <input
-            ref={inputRef}
-            id={inputId}
+            ref={urlRef}
+            id={urlInputId}
             type="url"
             required
             disabled={isLoading}
