@@ -58,12 +58,19 @@ function isAllowedContentType(contentType: string | null): boolean {
 }
 
 /**
- * Bağlantı aşaması için zaman aşımı — canlı akış saatlerce sürebilir,
- * bu yüzden toplam süreyi değil yalnızca ilk yanıtı sınırlandırıyoruz.
- * İstemci sinyaliyle birleştirilerek hangisi önce gelirse onu kullanırız.
+ * YALNIZCA bağlantı aşamasını sınırlar: upstream ilk yanıtı bu süre içinde
+ * vermezse vazgeçilir. Canlı yayın saatlerce sürebildiği için toplam süreye
+ * tavan konmaz.
  *
- * DİKKAT: Bu değeri "akış kesildi" hatasını düzeltmek amacıyla toplam
- * bağlantı süresi olarak ayarlamayın — uzun seyirciyi koparır.
+ * DİKKAT — bu zamanlayıcı `fetch`'e doğrudan verilemez. `AbortSignal.timeout()`
+ * (veya onu içeren bir `AbortSignal.any()`) undici'de başlıklar geldikten sonra
+ * da yanıt gövdesine bağlı kalır ve sessizce bir TOPLAM SÜRE tavanına dönüşür.
+ * Bu hata bir kez yaşandı: 12,4 MB aktıktan sonra t=20,0s'de "TypeError:
+ * terminated", yani her kanal tam 20 saniyede kesiliyordu.
+ *
+ * Doğru kullanım aşağıda: kendi `AbortController`'ımız kurulur, başlıklar gelir
+ * gelmez `clearTimeout` ile zamanlayıcı iptal edilir, istemcinin iptal sinyali
+ * ise bağlı kalır (sekme kapanınca upstream de kesilmelidir).
  */
 const STREAM_CONNECT_TIMEOUT_MS = 20_000;
 
