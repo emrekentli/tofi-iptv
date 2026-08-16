@@ -127,7 +127,7 @@ export function PlaylistBar({ playlists, activeId, onSelect, onAdd, onRemove }: 
               type="button"
               aria-label="Playlist'i sil"
               onClick={() => handleDeleteConfirm(pendingDelete)}
-              className="flex min-h-[44px] items-center justify-center gap-1.5 rounded bg-destructive px-3 font-medium text-white transition-colors duration-150 hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded bg-destructive px-3 font-medium text-white transition-colors duration-150 hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
             >
               <Check aria-hidden className="size-4" />
               <span>Sil</span>

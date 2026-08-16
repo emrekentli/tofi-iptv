@@ -67,13 +67,23 @@ export default function HomePage() {
     selectedIdRef.current = selected?.id ?? null;
   }, [selected]);
 
+  // I1: Aktif playlist id'sini ve aktif sekmeyi ref'e yansıt; loadTab içinde stale sonuç
+  // kontrolü için. switchPlaylist / activateTab tarafından synchronous olarak yazılır.
+  const activePlaylistIdRef = useRef<string | null>(null);
+  const activeTabRef = useRef<TabKind>("live");
+
   // Belirtilen playlist ve sekme için kanalları yükler; önbellekten varsa alır.
+  // I1: await'ten sonra activePlaylistIdRef ve activeTabRef ile karşılaştır;
+  // kullanıcı bu arada playlist veya sekme değiştirmişse sonucu yoksay.
   const loadTab = useCallback(async (playlistId: string, kind: ChannelKind) => {
     const cacheKey = `${playlistId}:${kind}`;
     const cached = channelCache.current.get(cacheKey);
     if (cached) {
-      setActiveChannels(cached);
-      setLoadingChannels(false);
+      // Önbellekten anlık dönüş — race olmaz.
+      if (activePlaylistIdRef.current === playlistId && activeTabRef.current === kind) {
+        setActiveChannels(cached);
+        setLoadingChannels(false);
+      }
       return;
     }
     setLoadingChannels(true);
@@ -81,6 +91,9 @@ export default function HomePage() {
       const channels = await loadChannelsByKind(playlistId, kind);
       // Önbelleğe al — aynı referans her renderda kullanılır.
       channelCache.current.set(cacheKey, channels);
+      // I1: Bu await sırasında kullanıcı playlist veya sekme değiştirmiş olabilir;
+      // eski isteğin sonucu aktif görünümün üzerine yazmasın.
+      if (activePlaylistIdRef.current !== playlistId || activeTabRef.current !== kind) return;
       setActiveChannels(channels);
     } catch {
       setDbError("Kanallar yüklenemedi. Tarayıcı depolamasına erişilemedi.");
@@ -101,6 +114,9 @@ export default function HomePage() {
           try { return localStorage.getItem(ACTIVE_PLAYLIST_KEY); } catch { return null; }
         })();
         const initial = list.find((p) => p.id === savedId) ?? list[0]!;
+        // I1: Ref'leri synchronous olarak başlat; loadTab sonuç kontrolünde kullanır.
+        activePlaylistIdRef.current = initial.id;
+        activeTabRef.current = "live";
         setActivePlaylistId(initial.id);
 
         // Sekme sayılarını yükle (kayıt belleğe alınmaz).
@@ -118,9 +134,14 @@ export default function HomePage() {
       });
   }, [loadTab]);
 
-  // Playlist veya sekme değişince kanalları yükle.
-  async function switchPlaylist(id: string) {
-    if (id === activePlaylistId) return;
+  // I2: switchPlaylist useCallback ile sarmalandı; referans kararlılığı sağlanır,
+  // PlaylistBar her ilgisiz state değişiminde yeniden render edilmez.
+  const switchPlaylist = useCallback(async (id: string) => {
+    if (id === activePlaylistIdRef.current) return;
+
+    // I1: Ref'leri synchronous olarak güncelle — await öncesinde.
+    activePlaylistIdRef.current = id;
+    activeTabRef.current = "live";
 
     // Önbellek ve seçim sıfırla (seçim başka playlist'e ait).
     setSelected(null);
@@ -140,10 +161,12 @@ export default function HomePage() {
     setKindCounts(counts);
 
     await loadTab(id, "live");
-  }
+  }, [loadTab]);
 
   function activateTab(kind: TabKind) {
     const idx = TABS.findIndex((t) => t.kind === kind);
+    // I1: activeTabRef'i synchronous olarak güncelle; loadTab await döndüğünde kontrol eder.
+    activeTabRef.current = kind;
     setActiveTab(kind);
     tabRefs.current[idx]?.focus();
 
@@ -214,6 +237,9 @@ export default function HomePage() {
     setSrc(null);
     setSignError(null);
     selectedIdRef.current = null;
+    // I1: Ref'leri synchronous olarak güncelle.
+    activePlaylistIdRef.current = playlist.id;
+    activeTabRef.current = "live";
     setActiveTab("live");
     setActivePlaylistId(playlist.id);
 
@@ -231,7 +257,13 @@ export default function HomePage() {
   }
 
   async function handleRemovePlaylist(id: string) {
-    await removePlaylist(id).catch(() => { /* silme başarısız olursa devam et */ });
+    // M2: Silme başarısız olursa kullanıcıya hata göster; UI'ı yanlışlıkla güncelleme.
+    try {
+      await removePlaylist(id);
+    } catch {
+      setDbError("Playlist silinemedi. Tarayıcı depolamasına erişilemedi.");
+      return;
+    }
 
     // Önbelleği temizle.
     for (const key of Array.from(channelCache.current.keys())) {
@@ -245,6 +277,7 @@ export default function HomePage() {
 
     if (updated.length === 0) {
       // Hiç playlist kalmadı — formu göster.
+      activePlaylistIdRef.current = null;
       setActivePlaylistId(null);
       setActiveChannels(null);
       setSelected(null);
@@ -263,6 +296,9 @@ export default function HomePage() {
       setSrc(null);
       setSignError(null);
       selectedIdRef.current = null;
+      // I1: Ref'leri synchronous olarak güncelle.
+      activePlaylistIdRef.current = next.id;
+      activeTabRef.current = "live";
       setActiveTab("live");
       setActivePlaylistId(next.id);
 

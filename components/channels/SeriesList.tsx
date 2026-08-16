@@ -8,6 +8,9 @@ import type { Channel } from "@/lib/types";
 const ROW_HEIGHT = 56; // estimateSize; gerçek yükseklik ≥44px CSS ile garanti edilir
 const DEBOUNCE_MS = 200;
 
+// M4: Bölüm başlığı regex'i her satır renderında yeniden derlenmemesi için modül kapsamına alındı.
+const EPISODE_TITLE_RE = /- S\d+E\d+ - (.+)$/;
+
 interface Props {
   channels: Channel[];
   selectedId: string | null;
@@ -42,6 +45,7 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
   const savedScrollTop = useRef<number>(0);
 
   // Gruplama — yalnızca channels değiştiğinde hesaplanır.
+  // I6: Sezon ve bölüm sayıları burada bir kere hesaplanır; seriesRows her aramada okur.
   const grouped = useMemo(() => {
     const map = new Map<string, Channel[]>();
     const other: Channel[] = [];
@@ -55,7 +59,15 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
       }
     }
     const titles = [...map.keys()].sort((a, b) => a.localeCompare(b, "tr"));
-    return { map, titles, other };
+    // Her dizi için sezon sayısını ve bölüm sayısını önceden hesapla.
+    const seasonCounts = new Map<string, number>();
+    const episodeCounts = new Map<string, number>();
+    for (const [title, episodes] of map) {
+      const seasons = new Set(episodes.map((ch) => ch.series!.season));
+      seasonCounts.set(title, seasons.size);
+      episodeCounts.set(title, episodes.length);
+    }
+    return { map, titles, other, seasonCounts, episodeCounts };
   }, [channels]);
 
   // Seviye 1 arama
@@ -64,18 +76,17 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
   const search = useDebounce(searchRaw, DEBOUNCE_MS);
 
   // Seviye 1 satırları: filtrelenmiş dizi listesi + Diğer
+  // I6: Sezon/bölüm sayıları grouped.seasonCounts / grouped.episodeCounts'tan okunur; yeniden hesaplanmaz.
   const seriesRows = useMemo((): SeriesRow[] => {
     const q = search.trim().toLowerCase();
     const rows: SeriesRow[] = [];
     for (const title of grouped.titles) {
       if (q && !title.toLowerCase().includes(q)) continue;
-      const episodes = grouped.map.get(title)!;
-      const seasons = new Set(episodes.map((ch) => ch.series!.season));
       rows.push({
         type: "series",
         title,
-        seasonCount: seasons.size,
-        episodeCount: episodes.length,
+        seasonCount: grouped.seasonCounts.get(title) ?? 0,
+        episodeCount: grouped.episodeCounts.get(title) ?? 0,
       });
     }
     // Diğer: arama yapılmıyorsa göster
@@ -119,9 +130,9 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
     return rows;
   }, [openSeries, grouped]);
 
-  // Geri butonuna tıklayınca kaydırma konumunu geri yükle
+  // Geri butonuna tıklayınca seviye 1'e dön; kaydırma konumu handleOpenSeries'de kaydedildi.
+  // C1: Seviye 2 açıkken level1ScrollRef null olduğundan burada yazmak 0 ile üzerine yazardı.
   function handleBack() {
-    savedScrollTop.current = level1ScrollRef.current?.scrollTop ?? 0;
     setOpenSeries(null);
   }
 
@@ -139,12 +150,11 @@ export function SeriesList({ channels, selectedId, onSelect }: Props) {
   }, [openSeries]);
 
   // Escape ile seviye 2'den seviye 1'e dön
+  // C1: Seviye 2 açıkken level1ScrollRef null; kaydırma konumu handleOpenSeries'de zaten kaydedildi.
   useEffect(() => {
     if (openSeries === null) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        // Kaydırma konumunu kaydet ve seviye 1'e dön
-        savedScrollTop.current = level1ScrollRef.current?.scrollTop ?? 0;
         setOpenSeries(null);
       }
     }
@@ -191,6 +201,12 @@ interface Level1Props {
 function Level1List({ rows, searchRaw, onSearchChange, searchId, scrollRef, onOpen }: Level1Props) {
   const [focusedIdx, setFocusedIdx] = useState(0);
   const rowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+
+  // I5: Arama sonucunda satır listesi daralınca focusedIdx sona geçebilir;
+  // Enter sessizce hiçbir şey yapmaması yerine sıfırla.
+  useEffect(() => {
+    setFocusedIdx(0);
+  }, [rows]);
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual bilinen uyumsuzluk; kaçınılmaz
   const virtualizer = useVirtualizer({
@@ -268,7 +284,6 @@ function Level1List({ rows, searchRaw, onSearchChange, searchId, scrollRef, onOp
             {items.map((vRow) => {
               const row = rows[vRow.index]!;
               const isFocused = vRow.index === focusedIdx;
-              const key = row.type === "other" ? "__other__" : row.title;
               return (
                 <div
                   key={vRow.key}
@@ -302,7 +317,8 @@ function Level1List({ rows, searchRaw, onSearchChange, searchId, scrollRef, onOp
                         : `${row.title}, ${row.seasonCount} sezon, ${row.episodeCount} bölüm`
                     }
                   >
-                    <span className="truncate text-sm font-medium text-foreground" title={key}>
+                    {/* M3: Tooltip için dahili sentinel (__other__) yerine okunabilir etiket kullan. */}
+                    <span className="truncate text-sm font-medium text-foreground" title={row.type === "other" ? `Diğer (${row.count})` : row.title}>
                       {row.type === "other" ? `Diğer (${row.count})` : row.title}
                     </span>
                     {row.type === "series" && (
@@ -373,7 +389,7 @@ function EpisodeList({ title, rows, selectedId, onSelect, onBack }: EpisodeListP
           type="button"
           onClick={onBack}
           aria-label="Dizi listesine geri dön"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-raised text-foreground transition-colors duration-150 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-raised text-foreground transition-colors duration-150 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
         >
           <ArrowLeft aria-hidden className="size-4" />
         </button>
@@ -474,7 +490,7 @@ function EpisodeRow({ channel, isSelected, isFocused, onSelect, onFocus, registe
     ? (() => {
         const code = `S${String(s.season).padStart(2, "0")}E${String(s.episode).padStart(2, "0")}`;
         // Kanal adından "Dizi S01 Dizi - S01E08 - Başlık" → bölüm başlığını çıkarmaya çalış
-        const match = channel.name.match(/- S\d+E\d+ - (.+)$/);
+        const match = channel.name.match(EPISODE_TITLE_RE);
         const episodeTitle = match?.[1]?.trim();
         return episodeTitle ? `${code} — ${episodeTitle}` : code;
       })()

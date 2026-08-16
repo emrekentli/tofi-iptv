@@ -4,6 +4,7 @@
 // "use client" direktifiyle işaretlenmelidir.
 import Dexie, { type Table } from "dexie";
 import type { Channel, ChannelKind, Playlist } from "./types";
+import { playlistIdFromUrl } from "./playlist-id";
 export { playlistIdFromUrl } from "./playlist-id";
 
 const CHUNK_SIZE = 5_000;
@@ -29,6 +30,7 @@ class TofiDb extends Dexie {
       .upgrade(async (tx) => {
         // Sürüm 1 kayıtlarında playlistId yok. localStorage'da saklanan adresten
         // bir playlist üretip mevcut kayıtları ona bağlıyoruz; veri kaybı olmasın.
+        // Bu yükseltme Dexie'nin atomik işlemi içinde çalışır; kısmi çalışma geri alınır.
         const existing = await tx.table("channels").count();
         if (existing === 0) return;
         const url = (() => {
@@ -38,15 +40,23 @@ class TofiDb extends Dexie {
             return "";
           }
         })();
-        const id = "migrated";
+        // I3: id'yi addPlaylist ile aynı türetici fonksiyondan üret; boş URL için yedek.
+        // Bu sayede aynı URL sonradan tekrar eklenince aynı id üretilir — yenileme mümkün olur.
+        const id = url ? await playlistIdFromUrl(url) : "migrated";
+        const name = url ? new URL(url).host : "Playlist";
         await tx.table("playlists").put({
           id,
-          name: url ? new URL(url).host : "Playlist",
+          name,
           url,
           addedAt: Date.now(),
           channelCount: existing,
         });
-        await tx.table("channels").toCollection().modify({ playlistId: id });
+        // I3: Kanal id'lerini yeni playlist id ile ad-alanla; addPlaylist formatıyla uyumlu.
+        // Eski id (URL hash), yeni id `${derivedId}:${oldId}` biçimine dönüştürülür.
+        await tx.table("channels").toCollection().modify((ch: Record<string, unknown>) => {
+          ch["id"] = `${id}:${ch["id"]}`;
+          ch["playlistId"] = id;
+        });
       });
   }
 }
