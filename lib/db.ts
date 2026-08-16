@@ -62,6 +62,23 @@ class TofiDb extends Dexie {
           needsReimport: true,
         });
       });
+
+    // Sürüm 3: Kanal kimliği üretim algoritması SHA-1 (node:crypto) yerine
+    // FNV-1a 32-bit (saf TypeScript) ile değiştirildi. Bu, Web Worker içinde
+    // çalışmayı ve HTTP dağıtımını mümkün kılar (crypto.subtle güvenli bağlam gerektirir).
+    // Eski kimliklerle yeni kimlikler eşleşmez; mevcut kanallar ve playlist'ler
+    // temizlenir. Kullanıcı playlist'ini yeniden ekleyebilir — içe aktarma artık
+    // saniyeler sürer, bu yüzden bu dürüst bir takas.
+    this.version(3)
+      .stores({
+        channels: "id, playlistId, kind, [playlistId+kind], group, name",
+        playlists: "id, addedAt",
+      })
+      .upgrade(async (tx) => {
+        // Tüm kanalları ve playlist'leri temizle; kimlik biçimi uyumsuz.
+        await tx.table("channels").clear();
+        await tx.table("playlists").clear();
+      });
   }
 }
 

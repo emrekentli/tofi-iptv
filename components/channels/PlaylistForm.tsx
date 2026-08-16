@@ -2,12 +2,15 @@
 
 import { Loader2, AlertCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { addPlaylist, playlistIdFromUrl, type RawChannel } from "@/lib/db";
+import { addPlaylist, playlistIdFromUrl } from "@/lib/db";
+import { loadPlaylist } from "@/lib/load-playlist";
 import type { Playlist } from "@/lib/types";
 
 type Phase =
   | { kind: "idle" }
-  | { kind: "downloading" }
+  | { kind: "downloading"; loaded: number }
+  | { kind: "parsing" }
+  | { kind: "server-fallback" }
   | { kind: "writing"; written: number; total: number }
   | { kind: "done" };
 
@@ -33,10 +36,19 @@ export function PlaylistForm({ onLoaded, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [urlEmpty, setUrlEmpty] = useState(false);
 
-  const isLoading = phase.kind === "downloading" || phase.kind === "writing";
+  const isLoading =
+    phase.kind === "downloading" ||
+    phase.kind === "parsing" ||
+    phase.kind === "server-fallback" ||
+    phase.kind === "writing";
 
   function statusText(): string {
-    if (phase.kind === "downloading") return "Playlist indiriliyor…";
+    if (phase.kind === "downloading") {
+      const kb = Math.round(phase.loaded / 1024);
+      return `İndiriliyor… ${kb.toLocaleString("tr-TR")} KB`;
+    }
+    if (phase.kind === "parsing") return "Kanallar ayrıştırılıyor…";
+    if (phase.kind === "server-fallback") return "Sunucu üzerinden deneniyor…";
     if (phase.kind === "writing")
       return `${phase.written.toLocaleString("tr-TR")} / ${phase.total.toLocaleString("tr-TR")} kayıt yazılıyor…`;
     return "";
@@ -53,35 +65,28 @@ export function PlaylistForm({ onLoaded, onCancel }: Props) {
     setUrlEmpty(false);
 
     setError(null);
-    setPhase({ kind: "downloading" });
+    setPhase({ kind: "downloading", loaded: 0 });
 
-    let channels: RawChannel[];
+    let channels: Parameters<typeof addPlaylist>[1];
     let skippedCount = 0;
 
     try {
-      const res = await fetch("/api/playlist", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // URL kimlik bilgisi taşır; yalnızca bu uygulamanın kendi sunucusuna gönderilir.
-        body: JSON.stringify({ url }),
+      const result = await loadPlaylist(url, (event) => {
+        if (event.phase === "downloading") {
+          setPhase({ kind: "downloading", loaded: event.loaded });
+        } else if (event.phase === "parsing") {
+          setPhase({ kind: "parsing" });
+        } else if (event.phase === "server-fallback") {
+          setPhase({ kind: "server-fallback" });
+        }
+        // "writing" ve "done" aşamaları addPlaylist sırasında aşağıda güncellenir
       });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const msg =
-          typeof body.error === "string"
-            ? body.error
-            : "Playlist yüklenemedi.";
-        setError(msg);
-        setPhase({ kind: "idle" });
-        return;
-      }
-
-      const data = await res.json();
-      channels = data.channels as RawChannel[];
-      skippedCount = typeof data.skipped === "number" ? data.skipped : 0;
-    } catch {
-      setError("Sunucuya ulaşılamadı. Bağlantınızı kontrol edin.");
+      channels = result.channels;
+      skippedCount = result.skipped;
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Playlist yüklenemedi.";
+      setError(msg);
       setPhase({ kind: "idle" });
       return;
     }
@@ -115,7 +120,7 @@ export function PlaylistForm({ onLoaded, onCancel }: Props) {
       });
     } catch {
       // addPlaylist önce varsa kanalları temizler; hata oluşursa kısmen temizlenmiş
-      // olabilir. Kullanıcı yeniden deneye bilir.
+      // olabilir. Kullanıcı yeniden deneyebilir.
       setError(
         "Kanallar kaydedilemedi. Tarayıcı depolama alanı dolu olabilir. Sayfayı yenileyip tekrar deneyin.",
       );
@@ -153,7 +158,7 @@ export function PlaylistForm({ onLoaded, onCancel }: Props) {
           />
         </div>
 
-        {/* Playlist adresi — zorunlu, kontrolsüz */}
+        {/* Playlist adresi — zorunlu, kontrolsüz (kimlik bilgisi taşır; React state'e girmez) */}
         <div className="flex flex-col gap-2">
           <label htmlFor={urlInputId} className="text-sm font-medium text-foreground">
             Playlist adresi
@@ -229,10 +234,10 @@ export function PlaylistForm({ onLoaded, onCancel }: Props) {
         </div>
       </form>
 
-      {/* Güvenlik uyarısı */}
+      {/* Güvenlik notu: playlist doğrudan tarayıcıdan çekilir; adres bu tarayıcıda kalır */}
       <p className="text-xs text-muted-foreground">
-        Playlist adresi yalnızca bu uygulamanın kendi sunucusuna gönderilir,
-        ayrıştırılır ve orada saklanmaz; adres yalnızca bu tarayıcıda tutulur.
+        Playlist adresi bu tarayıcıdan doğrudan çekilir ve yalnızca bu tarayıcıda tutulur.
+        CORS hatası olursa bu uygulamanın sunucusu yedek olarak devreye girer.
       </p>
     </div>
   );

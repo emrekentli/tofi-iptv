@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { ChannelKind, SeriesInfo } from "../types";
 import { classifyChannel } from "./classify";
 import { parseSeriesInfo } from "./series";
@@ -20,9 +19,37 @@ export type ParsedChannel = {
   series?: SeriesInfo;
 };
 
-/** Adresten kararlı kısa kimlik. Ad değişse de aynı kanal aynı kimliği alır. */
+/**
+ * FNV-1a 32-bit hash — bağımlılıksız, saf TypeScript.
+ * Kriptografik güç gerekmiyor; React anahtarı ve IndexedDB birincil anahtarı
+ * için kararlı dağılım yeterli. Node.js'e veya güvenli bağlama gerek yoktur.
+ *
+ * 32-bit tamsayıyı URL-güvenli base64 benzeri kodlamaya çevirir:
+ * 4 bayt → 6 URL-güvenli karakter (A-Z, a-z, 0-9, -, _).
+ */
+function fnv1a32(str: string): number {
+  let h = 0x811c9dc5; // FNV offset basis
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    // 32-bit çarpma — JavaScript bitwise işlemleri zaten 32-bit'e keser.
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/** Adresten kararlı kısa kimlik. Ad değişse de aynı kanal aynı kimliği alır.
+ *  FNV-1a 32-bit kullanır; Node.js veya güvenli bağlam gerektirmez. */
 function channelId(url: string): string {
-  return createHash("sha1").update(url).digest("base64url").slice(0, 12);
+  let n = fnv1a32(url);
+  let result = "";
+  // 32-bit → 6 karakterlik URL-güvenli dize (her karakter 6 bit temsil eder).
+  for (let i = 0; i < 6; i++) {
+    result = BASE62[n & 0x3f]! + result;
+    n >>>= 6;
+  }
+  return result;
 }
 
 function parseAttributes(block: string): Record<string, string> {
