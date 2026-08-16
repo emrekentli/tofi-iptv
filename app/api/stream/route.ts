@@ -1,3 +1,4 @@
+import { isHlsResponse, rewriteHlsPlaylist } from "@/lib/hls-rewrite";
 import { requireEnv } from "@/lib/env";
 import { verify } from "@/lib/sign";
 
@@ -70,6 +71,13 @@ export async function GET(request: Request): Promise<Response> {
     if (value) responseHeaders.set(name, value);
   }
   responseHeaders.set("cache-control", "no-store");
+
+  if (isHlsResponse(upstream.headers.get("content-type"), upstream.url)) {
+    // Playlist küçük bir metin dosyasıdır; belleğe alıp yeniden yazmak güvenlidir.
+    const rewritten = rewriteHlsPlaylist(await upstream.text(), upstream.url, secret);
+    responseHeaders.delete("content-length"); // uzunluk değişti
+    return new Response(rewritten, { status: 200, headers: responseHeaders });
+  }
 
   return new Response(upstream.body, {
     status: upstream.status,
