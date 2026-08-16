@@ -21,6 +21,7 @@ export default function LoginPage() {
     });
 
     if (response.ok) {
+      setPending(false);
       router.push("/");
       router.refresh();
       return;

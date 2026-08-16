@@ -8,8 +8,9 @@ import { SESSION_COOKIE, isValidSessionToken } from "@/lib/session";
 export function proxy(request: NextRequest) {
   const secret = process.env.TOFI_SECRET;
   if (!secret) {
+    console.error("TOFI_SECRET is not set");
     return new NextResponse(
-      "Sunucu yapılandırılmamış: TOFI_SECRET tanımlı değil.",
+      "Sunucu yapılandırması hatalı. Lütfen sistem yöneticisine başvurun.",
       { status: 500 },
     );
   }
@@ -25,5 +26,7 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Giriş sayfası, giriş API'si ve statik dosyalar korumadan muaftır.
-  matcher: ["/((?!login|api/auth|_next/static|_next/image|favicon.ico).*)"],
+  // NOT: login ve api/auth sınır-tutturulu (boundary-anchored) olmalıdır: loginhelp veya api/authorized
+  // gibi yollar korunmalı, fakat login/ ve api/auth/ yolları hariç tutulmalıdır.
+  matcher: ["/((?!login(?:/|$)|api/auth(?:/|$)|_next/static|_next/image|favicon.ico).*)"],
 };
