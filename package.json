@@ -11,6 +11,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.9",
+    "dexie": "^4.4.5",
     "hls.js": "^1.7.0",
     "lucide-react": "^1.31.0",
     "mpegts.js": "^1.8.2",
