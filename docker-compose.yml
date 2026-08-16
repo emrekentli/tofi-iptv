@@ -20,10 +20,12 @@ services:
       # Boş bırakılırsa uygulama otomatik algılar (önce doğrudan, hata olursa proxy).
       - NEXT_PUBLIC_FORCE_PROXY=${NEXT_PUBLIC_FORCE_PROXY:-}
 
-    # Ana sayfayı GET ile çekiyoruz: Next.js ayaktaysa HTML döner, TOFI_SECRET
-    # eksikse uygulama hiç başlamaz. Hafif ve sonuç üretici bir kontrol.
+    # /api/health TOFI_SECRET'ı açıkça doğrular ve geçersizse 503 döner.
+    # Ana sayfayı yoklamak YETMEZ: requireEnv istek anında çağrıldığı için
+    # (modül kapsamında olsa `next build` .env'siz ortamlarda kırılırdı)
+    # anahtar eksikken de ana sayfa 200 döner ve sorun gizli kalır.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
