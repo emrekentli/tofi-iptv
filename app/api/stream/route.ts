@@ -104,16 +104,24 @@ export async function GET(request: Request): Promise<Response> {
     }
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`Upstream'e bağlanılamadı (${host}):`, errorMsg);
-    return new Response("Yayın kaynağına ulaşılamadı", { status: 502 });
+    // 504: sağlayıcıya hiç ulaşılamadı (bağlantı hatası veya bağlantı zaman aşımı).
+    // Bu geçici bir durumdur; istemci yeniden deneyebilir.
+    return new Response(
+      "Yayın kaynağına ulaşılamadı — sağlayıcı sunucusu yanıt vermedi veya bağlantı zaman aşımına uğradı",
+      { status: 504 },
+    );
   }
 
   if (!upstream.ok) {
     // Gövde iptal edilerek bağlantı havuza iade edilir. Tüketilmemiş hata
     // gövdeleri soketi havuz dışında tutar ve zamanla sızıntıya yol açar.
     upstream.body?.cancel();
-    return new Response(`Yayın kaynağı ${upstream.status} döndü`, {
-      status: upstream.status === 404 ? 404 : 502,
-    });
+    // 502: sağlayıcı yanıt verdi ama aktif bir yayın döndürmedi.
+    // Bu yeniden denemede düzelmez; kanal sağlayıcı tarafında kapalı.
+    return new Response(
+      "Bu kanal şu anda yayında değil — sağlayıcı aktif bir yayın döndürmedi",
+      { status: upstream.status === 404 ? 404 : 502 },
+    );
   }
 
   const responseHeaders = new Headers();
@@ -140,8 +148,10 @@ export async function GET(request: Request): Promise<Response> {
   const upstreamContentType = upstream.headers.get("content-type");
   if (!isAllowedContentType(upstreamContentType)) {
     upstream.body?.cancel();
+    // 502: sağlayıcı yanıtladı ama medya yerine başka bir içerik gönderdi.
+    // HTML veya JSON tabanlı hata sayfası olma ihtimali yüksek; kanal kapalı.
     return new Response(
-      "Yayın kaynağı medya olmayan bir içerik tipi döndürdü; bağlantı reddedildi",
+      "Bu kanal şu anda yayında değil — sağlayıcı medya yerine başka bir içerik döndürdü",
       { status: 502 },
     );
   }

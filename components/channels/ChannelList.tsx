@@ -48,14 +48,18 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
   // Grup listesi kanallar değiştiğinde yeniden hesaplanır.
   const groups = useMemo(() => extractGroups(channels), [channels]);
 
-  // Filtreli kanal listesi: arama + grup filtresi.
+  // Filtreli ve sıralı kanal listesi: arama + grup filtresi + Türkçe ada göre sıralama.
+  // Sıralama bu useMemo içinde yapılır — arama veya grup değişiminde ekstra bir
+  // sort çalışmasını önler; 17 k kanal için bu fark ölçülebilir.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return channels.filter((ch) => {
+    const result = channels.filter((ch) => {
       if (group && ch.group !== group) return false;
       if (q && !ch.name.toLowerCase().includes(q)) return false;
       return true;
     });
+    result.sort((a, b) => a.name.localeCompare(b.name, "tr"));
+    return result;
   }, [channels, search, group]);
 
   // Filtre değiştiğinde listeyi en başa kaydır ve odağı sıfırla.

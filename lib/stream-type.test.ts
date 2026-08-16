@@ -4,6 +4,7 @@ import {
   fallbackEngine,
   isCodecError,
   isContainerMismatch,
+  isUnavailableStatus,
 } from "./stream-type";
 
 describe("detectEngine", () => {
@@ -126,5 +127,24 @@ describe("isContainerMismatch / isCodecError", () => {
   it("bilinmeyen hata detayı hiçbir sınıfa girmez", () => {
     expect(isContainerMismatch("hls", "bilinmeyenHata")).toBe(false);
     expect(isCodecError("hls", "bilinmeyenHata")).toBe(false);
+  });
+});
+
+describe("isUnavailableStatus", () => {
+  it("502 kanal kullanılamaz durumudur", () => {
+    expect(isUnavailableStatus(502)).toBe(true);
+  });
+
+  it("504 kanal kullanılamaz değil, geçici erişim hatasıdır", () => {
+    expect(isUnavailableStatus(504)).toBe(false);
+  });
+
+  it("404 kanal bulunamadı — passthrough, kullanılamaz DEĞİL", () => {
+    expect(isUnavailableStatus(404)).toBe(false);
+  });
+
+  it("0 veya -1 gibi sahte kodlar kullanılamaz sayılmaz", () => {
+    expect(isUnavailableStatus(0)).toBe(false);
+    expect(isUnavailableStatus(-1)).toBe(false);
   });
 });

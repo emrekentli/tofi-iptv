@@ -114,3 +114,17 @@ export function isCodecError(engine: StreamEngine, details: string): boolean {
   if (engine === "mpegts") return MPEGTS_CODEC_ERRORS.has(details);
   return false;
 }
+
+/**
+ * HTTP durum kodu, kanalın kullanılamaz olduğunu mu gösteriyor?
+ *
+ * 502 = proxy'nin kendi "kanal yayında değil" kodu.
+ * Sağlayıcı yanıt verdi ama aktif bir yayın döndürmedi (hata sayfası, 503 vb.).
+ * Bu durumda otomatik yeniden deneme ve motor takası anlamsızdır.
+ *
+ * 504 = sağlayıcıya hiç ulaşılamadı (bağlantı hatası / zaman aşımı).
+ * Bu geçici bir durumdur; yeniden deneme anlamlıdır.
+ */
+export function isUnavailableStatus(code: number): boolean {
+  return code === 502;
+}
