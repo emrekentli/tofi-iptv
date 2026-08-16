@@ -1,0 +1,30 @@
+services:
+  tofi-iptv:
+    build: .
+    restart: unless-stopped
+
+    ports:
+      # Nginx (veya başka bir reverse proxy) 80. portu dinleyip buradaki
+      # 3000. porta yönlendirir. Doğrudan 80:3000 eşlemesi de çalışır ama
+      # deploy/nginx.conf ile birlikte kullanıldığında 3000'i dışarıya açmak
+      # gerekmez; "127.0.0.1:3000:3000" yapmak isterseniz değiştirin.
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      # TOFI_SECRET: yayın URL'lerini şifreleyen AES-256-GCM anahtarı.
+      # Sunucuda yeniden üretin; geliştirme anahtarını taşımayın.
+      # Üretmek için: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+      - TOFI_SECRET=${TOFI_SECRET}
+
+      # İsteğe bağlı: tüm kanalları proxy üzerinden geçirmek isterseniz 1 yapın.
+      # Boş bırakılırsa uygulama otomatik algılar (önce doğrudan, hata olursa proxy).
+      - NEXT_PUBLIC_FORCE_PROXY=${NEXT_PUBLIC_FORCE_PROXY:-}
+
+    # Ana sayfayı GET ile çekiyoruz: Next.js ayaktaysa HTML döner, TOFI_SECRET
+    # eksikse uygulama hiç başlamaz. Hafif ve sonuç üretici bir kontrol.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

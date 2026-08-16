@@ -156,3 +156,184 @@ lib/
   sources/              M3U ayrıştırma, tür sınıflama, dizi adı çözümleme
 design-system/          Tasarım kuralları (MASTER.md)
 ```
+
+---
+
+## VPS'e Dağıtım
+
+### Neden HTTP, HTTPS değil?
+
+Bu uygulama **bilinçli olarak düz HTTP üzerinde** çalışır. Sebebi bantbant genişliği ve maliyet:
+
+IPTV sağlayıcıları yayın adreslerini `http://` ile sunar. Bir HTTPS sayfası
+`http://` içeriği yükleyemez — tarayıcılar bunu "karışık içerik" olarak engeller.
+HTTPS dağıtımında tarayıcı doğrudan sağlayıcıya bağlanamadığından **her yayın
+sunucu üzerinden geçmek zorunda kalır**.
+
+| | HTTPS + proxy | HTTP + doğrudan |
+|---|---|---|
+| Sunucudan geçen video | Tamamı | Neredeyse hiçbiri |
+| 10 kişi × 4 saat/gün | ~2,7 TB/ay | ~10 MB/ay |
+
+HTTP'nin bedeli: tarayıcı "Güvenli değil" uyarısı gösterir. **Fonksiyonel
+kayıp yoktur** — IndexedDB, Web Worker, MSE, tam ekran ve Resim İçinde Resim
+hepsi HTTP'de çalışır; şifreli oturum yok, kart bilgisi yok.
+
+**HTTP'nin gerçek riski:** playlist adresiniz abonelik kullanıcı adı ve
+şifrenizi taşır. Bu adres düz HTTP ile sunucuya gönderildiğinde (yayın izlerken
+değil, proxy yedek yolunda imzalama yapılırken) aynı ağdaki bir gözlemci
+tarafından okunabilir. Bu uygulamayı ev ağınızda veya VPN arkasında çalıştırırsanız
+risk sınırlıdır; herkese açık bir ağda ise bilinçli bir değerlendirme yapın.
+
+---
+
+### Kimlik doğrulama yok — ne anlama gelir?
+
+Uygulama herhangi bir oturum açma mekanizması içermez. Sunucunun adresini
+bilen herkes uygulamayı kullanabilir. Herkese açık bir IP'ye kurarsanız:
+
+- Başkaları kendi playlist'lerini girip yayın izleyebilir.
+- `/api/stream` proxy'si, imzalı bir token'ı genel amaçlı medya iletimi için
+  kullanılabilir.
+
+**Önerilen:** uygulamayı Tailscale / WireGuard VPN arkasında tutun, ya da
+nginx'e HTTP Basic Auth ekleyin.
+
+---
+
+### `TOFI_SECRET` Üretimi
+
+Sunucuda **yeni bir anahtar üretin**; geliştirme makinenizdeki anahtarı
+taşımayın:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+Bu komutu her dağıtımda bir kez çalıştırın ve çıktıyı saklayın. Anahtarı
+değiştirirseniz daha önce üretilmiş token'lar geçersiz olur; kanalı yeniden
+seçmek yeterlidir.
+
+---
+
+### ffmpeg Kurulumu
+
+Proxy yedek yolunda tarayıcının çözemediği ses kodeklerini (MP2, AC-3)
+AAC'ye çevirmek için ffmpeg gerekir:
+
+```bash
+sudo apt install ffmpeg
+```
+
+`apt install` sonrası ffmpeg `PATH`'e eklenir; `FFMPEG_PATH` ortam
+değişkenini ayarlamanız **gerekmez**. `FFMPEG_PATH` yalnızca Windows'ta
+`winget` kurulumunun kısayol oluşturmadığı durumlarda gereklidir.
+
+ffmpeg yoksa proxy yedek yolu çalışmaya devam eder; ses dönüştürülmeden
+olduğu gibi iletilir. Bazı kanallar bu durumda sessiz oynatılabilir.
+
+---
+
+### Docker ile Dağıtım
+
+**1. `.env` dosyasını oluşturun:**
+
+```bash
+cp .env.example .env
+# .env dosyasını açıp TOFI_SECRET değerini sunucuda ürettiğiniz anahtarla doldurun
+```
+
+`.env` dosyası git tarafından izlenmez; içine gizli dizi yazmak güvenlidir.
+
+**2. İmajı derleyip başlatın:**
+
+```bash
+docker compose up -d --build
+```
+
+**3. Nginx yapılandırması (aşağıdaki nginx adımına bakın).**
+
+**4. Durumu kontrol edin:**
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+---
+
+### Bare Node + systemd ile Dağıtım
+
+**1. Kaynak kodunu sunucuya kopyalayın** (git clone veya rsync).
+
+**2. Bağımlılıkları kurun ve derleyin:**
+
+```bash
+cd /opt/tofi-iptv
+npm ci
+npm run build
+```
+
+**3. `tofi` kullanıcısını oluşturun:**
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin tofi
+sudo chown -R tofi:tofi /opt/tofi-iptv
+```
+
+**4. Ortam değişkenlerini yazın:**
+
+```bash
+sudo tee /opt/tofi-iptv/.env > /dev/null <<EOF
+TOFI_SECRET=<üretilen-anahtar>
+EOF
+sudo chmod 600 /opt/tofi-iptv/.env
+sudo chown tofi:tofi /opt/tofi-iptv/.env
+```
+
+**5. Systemd birimini kurun:**
+
+```bash
+sudo cp deploy/tofi-iptv.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tofi-iptv
+sudo systemctl status tofi-iptv
+```
+
+---
+
+### Nginx Yapılandırması
+
+```bash
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/tofi-iptv
+sudo ln -s /etc/nginx/sites-available/tofi-iptv /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Kritik:** `nginx.conf` içindeki `/api/stream` bloğundaki şu ayarlar
+**kaldırılmamalıdır**:
+
+```nginx
+proxy_buffering off;          # Kapalı olmazsa canlı yayın akmaz — tampon dolar, ekran siyah kalır
+proxy_request_buffering off;
+proxy_read_timeout 24h;       # Canlı yayın saatlerce sürer; 60 sn varsayılan her sessiz anda keser
+proxy_http_version 1.1;
+```
+
+Bu satırlar "temizlik" amacıyla kaldırılırsa sessizce playback bozulur;
+hata logu üretmez, yalnızca takılı oynatıcı görürsünüz.
+
+---
+
+### Proxy Yedek Yolu — Bant Genişliği Beklentisi
+
+Video normalde **doğrudan sağlayıcıdan tarayıcıya** akar; sunucu trafiği
+yoktur. Proxy devreye giren durumlar:
+
+- Sağlayıcı CORS başlığı göndermiyorsa (`Access-Control-Allow-Origin` eksik)
+- Ses kodeği tarayıcının desteklemediği bir format ise (MP2, AC-3)
+
+Bu durumlarda sunucu her yayın için ~2–8 Mbit/s geçirir. 10 kişi aynı anda
+proxy üzerinden izlerse ~25–80 Mbit/s sunucu bant genişliği tüketilir ve
+aylık trafik hızla TB mertebesine çıkabilir. VPS sağlayıcınızın bant genişliği
+limitini göz önünde bulundurun.

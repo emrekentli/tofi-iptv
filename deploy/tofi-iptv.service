@@ -1,0 +1,67 @@
+# Tofi IPTV — systemd servis birimi
+#
+# Docker kullanmayanlar için. Kurulum:
+#
+#   1. /opt/tofi-iptv dizininde derleme yapın:
+#        cd /opt/tofi-iptv && npm ci && npm run build
+#
+#   2. /opt/tofi-iptv/.env dosyasını oluşturun (aşağıdaki biçimde):
+#        TOFI_SECRET=<üretilen-anahtar>
+#
+#   3. Bu dosyayı kopyalayın ve servisi etkinleştirin:
+#        sudo cp deploy/tofi-iptv.service /etc/systemd/system/
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now tofi-iptv
+#
+#   4. Durum kontrolü:
+#        sudo systemctl status tofi-iptv
+#        sudo journalctl -u tofi-iptv -f
+
+[Unit]
+Description=Tofi IPTV — Next.js uygulaması
+Documentation=https://github.com/emrekentli/tofi-iptv
+# Ağ hazır olmadan başlama; systemd-networkd veya NetworkManager'a bağlı olarak
+# seçin. Her ikisi de yoksa bu satırı kaldırabilirsiniz.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Kök olmayan bir kullanıcıyla çalıştır. Kullanıcıyı önceden oluşturun:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin tofi
+User=tofi
+Group=tofi
+
+# Uygulama dosyalarının bulunduğu dizin. Burası next build çıktısını içermeli.
+WorkingDirectory=/opt/tofi-iptv
+
+# Ortam değişkenleri bu dosyadan okunur. TOFI_SECRET burada tanımlanır;
+# uygulama bu değişken olmadan başlamaz.
+EnvironmentFile=/opt/tofi-iptv/.env
+
+# ffmpeg: proxy yedek yolunda ses dönüştürmek için kullanılır.
+# apt install ffmpeg sonrası PATH'te olduğundan FFMPEG_PATH gerekmez.
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/node node_modules/.bin/next start
+
+# Beklenmedik çökmede yeniden başlat. Kasıtlı durdurma (systemctl stop)
+# yeniden başlatmayı tetiklemez.
+Restart=on-failure
+RestartSec=5s
+
+# Güvenlik sertleştirme: sistem yazılabilir yollarını kısıtla.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+# Uygulama çalışma dizinine yazma izni (Next.js önbelleği için).
+ReadWritePaths=/opt/tofi-iptv
+
+# Bağlantı noktası için log çıktısı; journald'a gider.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tofi-iptv
+
+[Install]
+WantedBy=multi-user.target
