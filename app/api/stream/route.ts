@@ -48,7 +48,7 @@ export async function GET(request: Request): Promise<Response> {
     try {
       host = new URL(target).host;
     } catch {
-      // Malformed target URL; use default host.
+      // Hedef URL çözümlenemedi; varsayılan host ile devam edilir.
     }
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`Upstream'e bağlanılamadı (${host}):`, errorMsg);
@@ -56,8 +56,8 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   if (!upstream.ok) {
-    // Cancel the response body to release the connection back to the pool.
-    // Without this, unconsumed bodies in error responses cause socket leaks.
+    // Gövde iptal edilerek bağlantı havuza iade edilir. Tüketilmemiş hata
+    // gövdeleri soketi havuz dışında tutar ve zamanla sızıntıya yol açar.
     upstream.body?.cancel();
     return new Response(`Yayın kaynağı ${upstream.status} döndü`, {
       status: upstream.status === 404 ? 404 : 502,
