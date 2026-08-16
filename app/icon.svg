@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Ekran + içinden oyulmuş oynat üçgeni. Üçgen delik olarak kesildiği için
+       (fill-rule evenodd) logo koyu ve açık zeminde aynı okunur.
+       16 pikselde de seçilebilsin diye tek parça ve kalın tutuldu. -->
+  <path
+    fill="#e11d48"
+    fill-rule="evenodd"
+    d="M5 4h22a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4H5a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4Zm8.4 6.6v10.8L22 16l-8.6-5.4Z"
+  />
+</svg>

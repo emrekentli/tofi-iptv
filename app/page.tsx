@@ -10,6 +10,7 @@ import {
 } from "@/lib/db";
 import { PlaylistForm } from "@/components/channels/PlaylistForm";
 import { PlaylistBar } from "@/components/channels/PlaylistBar";
+import { Logo } from "@/components/Logo";
 import { CategoryList } from "@/components/channels/CategoryList";
 import { ChannelList } from "@/components/channels/ChannelList";
 import { SeriesList } from "@/components/channels/SeriesList";
@@ -464,8 +465,10 @@ export default function HomePage() {
         onRemove={(id) => { handleRemovePlaylist(id).catch(() => { /* hata handleRemovePlaylist içinde yönetilir */ }); }}
       />
 
-      {/* Üst çubuk: sekme listesi */}
+      {/* Üst çubuk: marka + sekme listesi */}
       <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-3">
+        {/* Dar ekranda sekmelere yer açmak için marka gizlenir. */}
+        <Logo className="mr-4 hidden text-accent sm:inline-flex" />
         <nav
           role="tablist"
           aria-label="İçerik türü"
