@@ -21,14 +21,11 @@ export type ParsedChannel = {
 
 /**
  * FNV-1a 32-bit hash — bağımlılıksız, saf TypeScript.
- * Kriptografik güç gerekmiyor; React anahtarı ve IndexedDB birincil anahtarı
- * için kararlı dağılım yeterli. Node.js'e veya güvenli bağlama gerek yoktur.
- *
- * 32-bit tamsayıyı URL-güvenli base64 benzeri kodlamaya çevirir:
- * 4 bayt → 6 URL-güvenli karakter (A-Z, a-z, 0-9, -, _).
+ * Node.js'e veya güvenli bağlama gerek yoktur; Web Worker'da da çalışır.
+ * `basis` parametresi farklı tohumlarla ikinci bir bağımsız şerit üretmek içindir.
  */
-function fnv1a32(str: string): number {
-  let h = 0x811c9dc5; // FNV offset basis
+function fnv1a32(str: string, basis: number): number {
+  let h = basis;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);
     // 32-bit çarpma — JavaScript bitwise işlemleri zaten 32-bit'e keser.
@@ -39,17 +36,30 @@ function fnv1a32(str: string): number {
 
 const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/** Adresten kararlı kısa kimlik. Ad değişse de aynı kanal aynı kimliği alır.
- *  FNV-1a 32-bit kullanır; Node.js veya güvenli bağlam gerektirmez. */
-function channelId(url: string): string {
-  let n = fnv1a32(url);
-  let result = "";
-  // 32-bit → 6 karakterlik URL-güvenli dize (her karakter 6 bit temsil eder).
+/** 32-bit tamsayıyı 6 URL-güvenli karaktere çevirir (karakter başına 6 bit). */
+function encode32(value: number): string {
+  let n = value;
+  let out = "";
   for (let i = 0; i < 6; i++) {
-    result = BASE62[n & 0x3f]! + result;
+    out = BASE62[n & 0x3f]! + out;
     n >>>= 6;
   }
-  return result;
+  return out;
+}
+
+/**
+ * Adresten kararlı kimlik. Ad değişse de aynı kanal aynı kimliği alır.
+ *
+ * İki farklı tohumla iki FNV-1a şeridi hesaplanır ve birleştirilir — yani
+ * 64 bit. Tek şerit (32 bit) YETMEZ: gerçek playlist'te 132.486 kanalla
+ * ölçüldüğünde 2 çakışma üretti ve `id` birincil anahtar olduğu için
+ * çakışan kanallar birbirini sessizce eziyordu. Doğum günü paradoksu
+ * 32 bitte ~2 çakışma öngörür; 64 bitte beklenen sayı ~5e-10'dur.
+ */
+function channelId(url: string): string {
+  const lo = fnv1a32(url, 0x811c9dc5); // standart FNV offset basis
+  const hi = fnv1a32(url, 0x01000193); // ikinci bağımsız şerit
+  return encode32(hi) + encode32(lo);
 }
 
 function parseAttributes(block: string): Record<string, string> {

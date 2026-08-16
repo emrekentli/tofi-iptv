@@ -45,14 +45,31 @@ describe("channelId (FNV-1a)", () => {
     }
   });
 
-  it("6 karakter uzunluğunda kimlik üretir (32-bit → 6x6-bit)", () => {
+  it("12 karakter uzunluğunda kimlik üretir (64 bit → 12x6-bit)", () => {
     const id = getChannelId("http://sunucu/test.m3u");
-    expect(id).toHaveLength(6);
+    expect(id).toHaveLength(12);
   });
 
   it("boş adres için bile kimlik üretir", () => {
     const id = getChannelId("http://s/");
-    expect(id).toHaveLength(6);
+    expect(id).toHaveLength(12);
+  });
+
+  /**
+   * Gerileme testi. Kimlik `id` alanı Dexie'de birincil anahtardır; çakışan
+   * iki kanaldan biri diğerini sessizce ezer ve listeden kaybolur.
+   *
+   * Tek şeritli 32-bit sürüm, sahibin gerçek 132.486 kanallık playlist'inde
+   * 2 çakışma üretmişti. Bu test aynı ölçeği sentetik adreslerle taklit eder,
+   * böylece ağa çıkmadan aynı gerilemeyi yakalar.
+   */
+  it("132 bin adreste çakışma üretmez", () => {
+    const seen = new Set<string>();
+    const total = 132_486;
+    for (let i = 0; i < total; i++) {
+      seen.add(getChannelId(`http://sunucu:8080/KULLANICI/SIFRE/${100000 + i}`));
+    }
+    expect(seen.size).toBe(total);
   });
 });
 
