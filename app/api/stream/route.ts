@@ -44,11 +44,21 @@ export async function GET(request: Request): Promise<Response> {
       // İstemci sekmeyi kapattı veya kanal değiştirdi; hata değil.
       return new Response(null, { status: 499 });
     }
-    console.error("Upstream'e bağlanılamadı:", error);
+    let host = "unknown";
+    try {
+      host = new URL(target).host;
+    } catch {
+      // Malformed target URL; use default host.
+    }
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`Upstream'e bağlanılamadı (${host}):`, errorMsg);
     return new Response("Yayın kaynağına ulaşılamadı", { status: 502 });
   }
 
   if (!upstream.ok) {
+    // Cancel the response body to release the connection back to the pool.
+    // Without this, unconsumed bodies in error responses cause socket leaks.
+    upstream.body?.cancel();
     return new Response(`Yayın kaynağı ${upstream.status} döndü`, {
       status: upstream.status === 404 ? 404 : 502,
     });
