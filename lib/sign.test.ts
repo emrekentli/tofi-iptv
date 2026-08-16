@@ -1,62 +1,80 @@
 import { describe, expect, it } from "vitest";
-import { proxyUrl, sign, verify } from "./sign";
+import { encryptToken, decryptToken, proxyUrl } from "./sign";
 
-const SECRET = "test-secret";
+const SECRET = "test-secret-long-enough";
 const URL_A = "http://provider.example/live/1.ts";
 const URL_B = "http://provider.example/live/2.ts";
 
-describe("sign", () => {
-  it("aynı girdi için aynı imzayı üretir", () => {
-    expect(sign(URL_A, SECRET)).toBe(sign(URL_A, SECRET));
+describe("encryptToken / decryptToken", () => {
+  it("şifrelenmiş token'ı geri çözer", () => {
+    const token = encryptToken(URL_A, SECRET);
+    expect(decryptToken(token, SECRET)).toBe(URL_A);
   });
 
-  it("farklı URL için farklı imza üretir", () => {
-    expect(sign(URL_A, SECRET)).not.toBe(sign(URL_B, SECRET));
+  it("farklı URL'ler için farklı token üretir (rastgele IV)", () => {
+    const t1 = encryptToken(URL_A, SECRET);
+    const t2 = encryptToken(URL_A, SECRET);
+    // Rastgele IV sayesinde aynı girdi farklı token üretir
+    expect(t1).not.toBe(t2);
+    // Ama her ikisi de doğru çözülür
+    expect(decryptToken(t1, SECRET)).toBe(URL_A);
+    expect(decryptToken(t2, SECRET)).toBe(URL_A);
   });
 
-  it("farklı gizli anahtar için farklı imza üretir", () => {
-    expect(sign(URL_A, SECRET)).not.toBe(sign(URL_A, "other-secret"));
+  it("farklı gizli anahtarla çözmeye çalışınca null döner", () => {
+    const token = encryptToken(URL_A, SECRET);
+    expect(decryptToken(token, "yanlis-anahtar-abc12")).toBeNull();
   });
 
-  it("URL güvenli karakterler üretir", () => {
-    expect(sign(URL_A, SECRET)).toMatch(/^[A-Za-z0-9_-]+$/);
-  });
-});
-
-describe("verify", () => {
-  it("geçerli imzayı kabul eder", () => {
-    expect(verify(URL_A, sign(URL_A, SECRET), SECRET)).toBe(true);
+  it("değiştirilmiş token null döner", () => {
+    const token = encryptToken(URL_A, SECRET);
+    // Son karakteri değiştir
+    const tampered = token.slice(0, -1) + (token.at(-1) === "A" ? "B" : "A");
+    expect(decryptToken(tampered, SECRET)).toBeNull();
   });
 
-  it("başka URL'in imzasını reddeder", () => {
-    expect(verify(URL_A, sign(URL_B, SECRET), SECRET)).toBe(false);
+  it("kısa/bozuk token null döner", () => {
+    expect(decryptToken("kisa", SECRET)).toBeNull();
+    expect(decryptToken("", SECRET)).toBeNull();
   });
 
-  it("yanlış gizli anahtarla üretilmiş imzayı reddeder", () => {
-    expect(verify(URL_A, sign(URL_A, "other-secret"), SECRET)).toBe(false);
+  it("token URL güvenli karakterler içerir (base64url)", () => {
+    const token = encryptToken(URL_A, SECRET);
+    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
-  it("farklı uzunluktaki imzada çökmeden false döner", () => {
-    expect(verify(URL_A, "kisa", SECRET)).toBe(false);
+  it("farklı URL'ler doğru çözülür", () => {
+    expect(decryptToken(encryptToken(URL_A, SECRET), SECRET)).toBe(URL_A);
+    expect(decryptToken(encryptToken(URL_B, SECRET), SECRET)).toBe(URL_B);
   });
 
-  it("boş imzayı reddeder", () => {
-    expect(verify(URL_A, "", SECRET)).toBe(false);
+  it("sorgu parametresi içeren URL'leri bozulmadan şifreler", () => {
+    const target = "http://provider.example/x?a=1&b=2";
+    expect(decryptToken(encryptToken(target, SECRET), SECRET)).toBe(target);
   });
 });
 
 describe("proxyUrl", () => {
-  it("hedefi ve imzayı sorgu parametresi olarak kodlar", () => {
+  it("t parametreli /api/stream yolu üretir", () => {
     const result = proxyUrl(URL_A, SECRET);
     const parsed = new URL(result, "http://localhost");
     expect(parsed.pathname).toBe("/api/stream");
-    expect(parsed.searchParams.get("u")).toBe(URL_A);
-    expect(parsed.searchParams.get("sig")).toBe(sign(URL_A, SECRET));
+    expect(parsed.searchParams.has("t")).toBe(true);
+    expect(parsed.searchParams.has("u")).toBe(false);
+    expect(parsed.searchParams.has("sig")).toBe(false);
   });
 
-  it("sorgu içeren hedefleri bozmadan kodlar", () => {
+  it("token'dan orijinal URL geri çözülür", () => {
+    const result = proxyUrl(URL_A, SECRET);
+    const parsed = new URL(result, "http://localhost");
+    const token = parsed.searchParams.get("t")!;
+    expect(decryptToken(token, SECRET)).toBe(URL_A);
+  });
+
+  it("sorgu içeren hedefleri bozulmadan şifreler", () => {
     const target = "http://provider.example/x?a=1&b=2";
     const parsed = new URL(proxyUrl(target, SECRET), "http://localhost");
-    expect(parsed.searchParams.get("u")).toBe(target);
+    const token = parsed.searchParams.get("t")!;
+    expect(decryptToken(token, SECRET)).toBe(target);
   });
 });

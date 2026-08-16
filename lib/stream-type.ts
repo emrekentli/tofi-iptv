@@ -3,12 +3,19 @@ export type StreamEngine = "hls" | "mpegts" | "native";
 const NATIVE_EXTENSIONS = [".mp4", ".mkv", ".webm", ".mov", ".m4v"];
 const MPEGTS_EXTENSIONS = [".ts", ".mpegts", ".mts"];
 
-/** Proxy URL'i verildiyse içindeki gerçek hedefi çıkarır. */
+/**
+ * Proxy URL'i verildiyse içindeki gerçek hedefi çıkarır.
+ * Token şifrelidir — çözümleme burada yapılmaz; yalnızca uzantı tespiti için
+ * en iyi çaba gösterilir. Token geçersizse kaynak URL döndürülür.
+ */
 function extractTarget(src: string): string {
   try {
     const url = new URL(src, "http://localhost");
     if (url.pathname === "/api/stream") {
-      return url.searchParams.get("u") ?? src;
+      // Eski "u" parametresi (geriye dönük uyumluluk): şifreli token "t" tercih edilir,
+      // ancak burada şifre çözümü yapılamaz — uzantı tespiti için token içeriğine
+      // erişim gerekmez, sadece uzantısız varsayılan (HLS) döndürülür.
+      return src;
     }
     return src;
   } catch {

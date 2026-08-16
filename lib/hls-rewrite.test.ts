@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { isHlsResponse, rewriteHlsPlaylist } from "./hls-rewrite";
+import { decryptToken } from "./sign";
 
-const SECRET = "test-secret";
+const SECRET = "test-secret-long-enough";
 const BASE = "http://provider.example/live/stream.m3u8";
 
-/** Yeniden yazılmış satırdan orijinal hedefi geri çıkarır. */
+/** Yeniden yazılmış satırdan şifreli token'ı çözüp orijinal hedefi geri çıkarır. */
 function targetOf(line: string): string {
-  return new URL(line, "http://localhost").searchParams.get("u") ?? "";
+  const token = new URL(line, "http://localhost").searchParams.get("t") ?? "";
+  return decryptToken(token, SECRET) ?? "";
 }
 
 describe("rewriteHlsPlaylist", () => {

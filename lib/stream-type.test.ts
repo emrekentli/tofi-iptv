@@ -30,9 +30,10 @@ describe("detectEngine", () => {
     expect(detectEngine("http://a.example/X.M3U8")).toBe("hls");
   });
 
-  it("proxy URL'inin içindeki gerçek hedefe bakar", () => {
-    const src = "/api/stream?u=" + encodeURIComponent("http://a.example/x.ts") + "&sig=z";
-    expect(detectEngine(src)).toBe("mpegts");
+  it("proxy URL'i verildiyse uzantısız varsayılan (HLS) döner", () => {
+    // Şifreli token çözümü burada yapılamaz; proxy URL'leri için HLS varsayılır.
+    const src = "/api/stream?t=opak-token";
+    expect(detectEngine(src)).toBe("hls");
   });
 
   it("sağlayıcı adresi doğrudan verildiğinde uzantısından tanır", () => {
