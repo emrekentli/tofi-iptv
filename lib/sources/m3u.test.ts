@@ -87,4 +87,28 @@ describe("parseM3U", () => {
     );
     expect(channels[0].id).not.toBe(channels[1].id);
   });
+
+  it("/series/ adresli kayıt kind: series alır", () => {
+    const input =
+      HEADER + '#EXTINF:-1,Dizi Adı\n' + "http://s:8080/series/u/p/210007.mkv\n";
+    const { channels } = parseM3U(input);
+    expect(channels[0].kind).toBe("series");
+  });
+
+  it("öznitelik değerindeki satır sonu tek kayıt atlar (ikiye bölmez)", () => {
+    // #EXTINF satırı bir öznitelik değerindeki gömülü satır sonu tarafından ikiye bölünmüşse
+    // EXTINF regex eşleşmez, tek kayıt atlanır — ancak iki kayıt sayılmaz.
+    // Bu, gözlemlenen davranışı tespit eder; değiştirilmesini önlemek için burada.
+    const input =
+      HEADER +
+      '#EXTINF:-1 group-title="Spor\nFutbol",Bölünmüş Kanal\n' +
+      "http://s/1\n" +
+      "#EXTINF:-1,Normal Kanal\n" +
+      "http://s/2\n";
+    const result = parseM3U(input);
+    // Bölünmüş kayıt: EXTINF regex eşleşmez → 1 atlanır; Normal Kanal başarıyla okunur.
+    expect(result.skipped).toBe(1);
+    expect(result.channels).toHaveLength(1);
+    expect(result.channels[0].name).toBe("Normal Kanal");
+  });
 });

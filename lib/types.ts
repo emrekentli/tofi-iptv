@@ -1,3 +1,6 @@
+/** Kanal içerik türü: canlı yayın, film veya dizi. */
+export type ChannelKind = "live" | "movie" | "series";
+
 /** Uygulamanın her yerinde kullanılan tek kanal tipi. */
 export type Channel = {
   /** Adresten türetilen kararlı kimlik; React anahtarı ve favori eşleşmesi için. */
@@ -5,6 +8,8 @@ export type Channel = {
   name: string;
   logo?: string;
   group?: string;
-  /** İmzalı proxy adresi — doğrudan <VideoPlayer src> olarak verilebilir. */
+  /** İçerik türü: canlı yayın, film veya dizi. */
+  kind: ChannelKind;
+  /** Ham sağlayıcı adresi — imzalanmamış, doğrudan istemciye verilmez. */
   url: string;
 };

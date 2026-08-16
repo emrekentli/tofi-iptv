@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { ChannelKind } from "../types";
+import { classifyChannel } from "./classify";
 
 /** Süre, öznitelik bloğu ve görünen adı ayırır. Öznitelik değerindeki
  *  virgüller ada karışmasın diye ad, öznitelik bloğundan sonraki
@@ -11,6 +13,7 @@ export type ParsedChannel = {
   name: string;
   logo?: string;
   group?: string;
+  kind: ChannelKind;
   rawUrl: string;
 };
 
@@ -37,7 +40,7 @@ export function parseM3U(text: string): {
 } {
   const channels: ParsedChannel[] = [];
   let skipped = 0;
-  let pending: Omit<ParsedChannel, "id" | "rawUrl"> | null = null;
+  let pending: Omit<ParsedChannel, "id" | "rawUrl" | "kind"> | null = null;
 
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
@@ -65,7 +68,12 @@ export function parseM3U(text: string): {
     if (line.startsWith("#")) continue;
 
     if (pending) {
-      channels.push({ ...pending, id: channelId(line), rawUrl: line });
+      channels.push({
+        ...pending,
+        id: channelId(line),
+        kind: classifyChannel(line),
+        rawUrl: line,
+      });
       pending = null;
     }
   }

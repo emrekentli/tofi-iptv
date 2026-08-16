@@ -1,14 +1,35 @@
-import { requireEnv } from "@/lib/env";
-import { proxyUrl } from "@/lib/sign";
 import { parseM3U } from "@/lib/sources/m3u";
 import type { Channel } from "@/lib/types";
 
 /** Playlist'ler büyük olabilir; makul bir tavan koyup belleği koruyoruz. */
 const MAX_BYTES = 200 * 1024 * 1024;
 
-export async function POST(request: Request): Promise<Response> {
-  const secret = requireEnv("TOFI_SECRET");
+/** Gövdeyi bayt sayarak okur; sınır aşılırsa akışı iptal edip null döner.
+ *  content-length başlığına güvenilemez — chunked yanıtlarda hiç gelmez. */
+async function readWithLimit(
+  response: Response,
+  maxBytes: number,
+): Promise<string | null> {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let total = 0;
 
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+export async function POST(request: Request): Promise<Response> {
   let url: unknown;
   try {
     ({ url } = await request.json());
@@ -35,9 +56,10 @@ export async function POST(request: Request): Promise<Response> {
     response = await fetch(target, { signal: request.signal, cache: "no-store" });
   } catch (error) {
     // Playlist adresi kullanıcı adı ve şifre taşır; yalnızca host loglanır.
+    const detail = error instanceof Error ? error.message : String(error);
     console.error(
       `Playlist indirilemedi (${target.host}):`,
-      error instanceof Error ? error.message : String(error),
+      detail.split(target.href).join("[adres]"),
     );
     return Response.json({ error: "Playlist sunucusuna ulaşılamadı" }, { status: 502 });
   }
@@ -55,18 +77,17 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const length = Number(response.headers.get("content-length") ?? 0);
-  if (length > MAX_BYTES) {
-    response.body?.cancel();
+  const text = await readWithLimit(response, MAX_BYTES);
+  if (text === null) {
     return Response.json({ error: "Playlist çok büyük" }, { status: 413 });
   }
 
-  const { channels: parsed, skipped } = parseM3U(await response.text());
+  const { channels: parsed, skipped } = parseM3U(text);
 
-  // İmzalama sunucuda yapılır; gizli anahtar istemciye asla gitmez.
+  // Ham adres döndürülür; imzalama istemci isteğinde /api/sign üzerinden yapılır.
   const channels: Channel[] = parsed.map(({ rawUrl, ...rest }) => ({
     ...rest,
-    url: proxyUrl(rawUrl, secret),
+    url: rawUrl,
   }));
 
   return Response.json({ channels, skipped });
