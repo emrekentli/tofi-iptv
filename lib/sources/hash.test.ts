@@ -63,11 +63,21 @@ describe("channelId (FNV-1a)", () => {
    * 2 çakışma üretmişti. Bu test aynı ölçeği sentetik adreslerle taklit eder,
    * böylece ağa çıkmadan aynı gerilemeyi yakalar.
    */
-  it("132 bin adreste çakışma üretmez", () => {
+  it("132 bin çeşitli adreste çakışma üretmez", () => {
+    // Adresler HOST, PORT, TÜR, KULLANICI, KİMLİK ve UZANTI eksenlerinde
+    // birlikte değişmelidir. Yalnızca sondaki sayıyı artıran bir üretici
+    // (ilk yazdığımız hâli) bu gerilemeyi YAKALAMAZ: ölçüldüğünde sıralı
+    // adresler 32 bitte bile 0 çakışma verir, çeşitli adresler ise 2.
+    // Yani o test, düzelttiği hatanın varlığında da geçerdi.
+    const kinds = ["live", "movie", "series"];
+    const extensions = ["", ".ts", ".mkv", ".mp4", ".m3u8"];
     const seen = new Set<string>();
     const total = 132_486;
     for (let i = 0; i < total; i++) {
-      seen.add(getChannelId(`http://sunucu:8080/KULLANICI/SIFRE/${100000 + i}`));
+      const url =
+        `http://s${i % 7}.ornek:${8080 + (i % 3)}/${kinds[i % 3]}` +
+        `/K${i % 5}/S${i % 11}/${(i * 7919) % 9_999_999}${extensions[i % 5]}`;
+      seen.add(getChannelId(url));
     }
     expect(seen.size).toBe(total);
   });

@@ -335,22 +335,36 @@ export async function GET(request: Request): Promise<Response> {
     if (value) headers.set(name, value);
   }
 
-  // Bağlantı aşaması için zaman aşımı: ilk yanıt gelmezse 20 s sonra vazgeç.
-  // İstemci önceden bağlantıyı keserse onun sinyali de ateşlenir.
-  const connectSignal = AbortSignal.any([
-    request.signal,
-    AbortSignal.timeout(STREAM_CONNECT_TIMEOUT_MS),
-  ]);
+  // Zaman aşımı YALNIZCA bağlantı aşamasını sınırlar: ilk yanıt gelmezse vazgeç.
+  //
+  // `AbortSignal.timeout()` doğrudan `fetch`'e verilemez. Undici'de sinyal,
+  // başlıklar geldikten sonra da yanıt gövdesine bağlı kalır; yani zamanlayıcı
+  // bir bağlantı zaman aşımı değil, TOPLAM SÜRE tavanı olur ve canlı yayını
+  // tam 20 saniyede koparır. Ölçüldü: 12,4 MB aktıktan sonra t=20,0s'de
+  // "TypeError: terminated".
+  //
+  // Bu yüzden kendi denetleyicimizi kuruyoruz ve başlıklar gelir gelmez
+  // zamanlayıcıyı iptal ediyoruz. İstemcinin iptali bağlı kalır — sekme
+  // kapandığında veya kanal değiştiğinde upstream yine kesilmelidir.
+  const controller = new AbortController();
+  const abortFromClient = () => controller.abort();
+  if (request.signal.aborted) controller.abort();
+  else request.signal.addEventListener("abort", abortFromClient, { once: true });
+  const connectTimer = setTimeout(
+    () => controller.abort(),
+    STREAM_CONNECT_TIMEOUT_MS,
+  );
 
   let upstream: Response;
   try {
     upstream = await fetch(target, {
       headers,
-      signal: connectSignal,
+      signal: controller.signal,
       redirect: "follow",
       cache: "no-store",
     });
   } catch (error) {
+    clearTimeout(connectTimer);
     if (request.signal.aborted) {
       // İstemci sekmeyi kapattı veya kanal değiştirdi; hata değil.
       return new Response(null, { status: 499 });
@@ -370,6 +384,10 @@ export async function GET(request: Request): Promise<Response> {
       { status: 504 },
     );
   }
+
+  // Başlıklar geldi: bağlantı aşaması bitti. Zamanlayıcı burada iptal edilmezse
+  // gövde akarken ateşlenir ve yayını 20 saniyede koparır.
+  clearTimeout(connectTimer);
 
   if (!upstream.ok) {
     // Gövde iptal edilerek bağlantı havuza iade edilir. Tüketilmemiş hata
