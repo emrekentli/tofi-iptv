@@ -11,6 +11,8 @@ interface Props {
   channels: Channel[];
   selectedId: string | null;
   onSelect: (channel: Channel) => void;
+  /** Dışarıdan gelen grup filtresi; boş string = tüm gruplar. CategoryList tarafından sağlanır. */
+  selectedGroup?: string;
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -22,22 +24,11 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
-/** Kanaldan benzersiz grup listesi çıkarır. */
-function extractGroups(channels: Channel[]): string[] {
-  const seen = new Set<string>();
-  for (const ch of channels) {
-    if (ch.group) seen.add(ch.group);
-  }
-  return Array.from(seen).sort((a, b) => a.localeCompare(b, "tr"));
-}
-
-export function ChannelList({ channels, selectedId, onSelect }: Props) {
+export function ChannelList({ channels, selectedId, onSelect, selectedGroup = "" }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchId = useId();
-  const groupId = useId();
 
   const [searchRaw, setSearchRaw] = useState("");
-  const [group, setGroup] = useState("");
   const search = useDebounce(searchRaw, DEBOUNCE_MS);
 
   // Gezinme odak indeksi (roving focus için)
@@ -45,28 +36,25 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
   // Satır düğmelerine ref erişimi için (odak taşımak amacıyla)
   const rowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
-  // Grup listesi kanallar değiştiğinde yeniden hesaplanır.
-  const groups = useMemo(() => extractGroups(channels), [channels]);
-
   // Filtreli ve sıralı kanal listesi: arama + grup filtresi + Türkçe ada göre sıralama.
   // Sıralama bu useMemo içinde yapılır — arama veya grup değişiminde ekstra bir
   // sort çalışmasını önler; 17 k kanal için bu fark ölçülebilir.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const result = channels.filter((ch) => {
-      if (group && ch.group !== group) return false;
+      if (selectedGroup && ch.group !== selectedGroup) return false;
       if (q && !ch.name.toLowerCase().includes(q)) return false;
       return true;
     });
     result.sort((a, b) => a.name.localeCompare(b.name, "tr"));
     return result;
-  }, [channels, search, group]);
+  }, [channels, search, selectedGroup]);
 
   // Filtre değiştiğinde listeyi en başa kaydır ve odağı sıfırla.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
     setFocusedIdx(0);
-  }, [search, group]);
+  }, [search, selectedGroup]);
 
   // Odaklanan satırı görünüme çek ve DOM odağını taşı.
   function moveFocus(nextIdx: number) {
@@ -92,7 +80,7 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Arama ve grup filtresi */}
+      {/* Kanal arama */}
       <div className="flex flex-col gap-2 border-b border-border px-3 py-3">
         <label htmlFor={searchId} className="text-sm font-medium text-foreground">
           Kanal ara
@@ -105,26 +93,6 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
           placeholder="Kanal ara…"
           className="h-11 w-full rounded-lg border border-border bg-surface px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
         />
-        {groups.length > 0 && (
-          <>
-            <label htmlFor={groupId} className="text-sm font-medium text-foreground">
-              Grup filtrele
-            </label>
-            <select
-              id={groupId}
-              value={group}
-              onChange={(e) => setGroup(e.target.value)}
-              className="h-11 w-full rounded-lg border border-border bg-surface px-3 text-base text-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
-            >
-              <option value="">Tüm gruplar</option>
-              {groups.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
       </div>
 
       {/* Sanallaştırılmış liste */}

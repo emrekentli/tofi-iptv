@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Tv, Film, Clapperboard, X } from "lucide-react";
+import { Tv, Film, Clapperboard, X, ArrowLeft } from "lucide-react";
 import {
   listPlaylists,
   removePlaylist,
@@ -10,6 +10,7 @@ import {
 } from "@/lib/db";
 import { PlaylistForm } from "@/components/channels/PlaylistForm";
 import { PlaylistBar } from "@/components/channels/PlaylistBar";
+import { CategoryList } from "@/components/channels/CategoryList";
 import { ChannelList } from "@/components/channels/ChannelList";
 import { SeriesList } from "@/components/channels/SeriesList";
 import { VideoPlayer } from "@/components/player/VideoPlayer";
@@ -56,6 +57,10 @@ export default function HomePage() {
   const [loadingChannels, setLoadingChannels] = useState(false);
   // Playlist formu görünür mü?
   const [showForm, setShowForm] = useState(false);
+  // Seçili kategori grubu; boş string = "Tümü". Sekme değiştiğinde sıfırlanır.
+  const [selectedGroup, setSelectedGroup] = useState<string>("");
+  // Mobil (<768px): hangi sütun gösteriliyor? "category" veya "channels"
+  const [mobilePane, setMobilePane] = useState<"category" | "channels">("category");
 
   // Sekme düğmelerine DOM odağı taşımak için ref dizisi
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -158,6 +163,8 @@ export default function HomePage() {
     selectedChannelRef.current = null;
     setActiveChannels(null);
     setActiveTab("live");
+    setSelectedGroup("");
+    setMobilePane("category");
 
     setActivePlaylistId(id);
 
@@ -176,6 +183,10 @@ export default function HomePage() {
     // I1: activeTabRef'i synchronous olarak güncelle; loadTab await döndüğünde kontrol eder.
     activeTabRef.current = kind;
     setActiveTab(kind);
+    // Sekme değiştiğinde kategori seçimi sıfırlanır; içerik türü kategoriden bağımsızdır.
+    setSelectedGroup("");
+    // Mobil sütun görünümünü kategori başına sıfırla.
+    setMobilePane("category");
     tabRefs.current[idx]?.focus();
 
     if (activePlaylistId) {
@@ -282,6 +293,8 @@ export default function HomePage() {
     activePlaylistIdRef.current = playlist.id;
     activeTabRef.current = "live";
     setActiveTab("live");
+    setSelectedGroup("");
+    setMobilePane("category");
     setActivePlaylistId(playlist.id);
 
     try {
@@ -345,6 +358,8 @@ export default function HomePage() {
       activePlaylistIdRef.current = next.id;
       activeTabRef.current = "live";
       setActiveTab("live");
+      setSelectedGroup("");
+      setMobilePane("category");
       setActivePlaylistId(next.id);
 
       try {
@@ -484,47 +499,29 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Ana içerik */}
-      <div className="flex flex-1 overflow-hidden lg:flex-row flex-col-reverse">
-        {/* Sol: kanal listesi */}
-        <aside
-          id={`tabpanel-${activeTab}`}
-          role="tabpanel"
-          aria-labelledby={activeTab}
-          className="flex flex-col border-r border-border bg-surface lg:w-80 lg:shrink-0 overflow-hidden flex-1 lg:flex-none"
-        >
-          {loadingChannels || activeChannels === null ? (
-            <p
-              className="px-4 py-8 text-center text-sm text-muted-foreground"
-              aria-live="polite"
-            >
-              Kanallar yükleniyor…
-            </p>
-          ) : activeTab === "series" ? (
-            // Dizi sekmesi: iki seviyeli gezinme (dizi → bölüm)
-            // key={activeTab} sekme değişiminde durumu sıfırlar
-            <SeriesList
-              key={activeTab}
-              channels={activeChannels}
-              selectedId={selected?.id ?? null}
-              onSelect={handleSelect}
-            />
-          ) : (
-            // key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (arama/grup/kaydırma sıfırlanır)
-            <ChannelList
-              key={activeTab}
-              channels={activeChannels}
-              selectedId={selected?.id ?? null}
-              onSelect={handleSelect}
-            />
-          )}
-        </aside>
+      {/* ─── Ana içerik: üç sütunlu düzen ─── */}
+      {/*
+          ≥1280px : [kategori 200px] [kanallar 320px] [oynatıcı flex-1]
+          768-1279px : oynatıcı üstte, kategori+kanallar altında iki sütun
+          <768px  : oynatıcı üstte, tek sütun (kategori→kanal geçişi)
+      */}
+      <div className="flex flex-1 overflow-hidden xl:flex-row flex-col">
 
-        {/* Sağ: oynatıcı */}
-        <main className="flex flex-col flex-1 overflow-hidden bg-background p-0 lg:p-0">
+        {/* Oynatıcı — mobil/tablet'te üst, masaüstünde sağ */}
+        <main
+          className={[
+            "flex flex-col overflow-hidden bg-background",
+            // Mobil: üstte yaklaşık 40dvh, altı kanal sütununa bırakır
+            "h-[40dvh] shrink-0",
+            // Tablet (768-1279px): üstte 45dvh
+            "md:h-[45dvh]",
+            // Masaüstü (≥1280px): sütun olur, yükseklik kısıtı kalkar
+            "xl:h-auto xl:flex-1",
+          ].join(" ")}
+        >
           {src ? (
             <div className="flex h-full items-center justify-center">
-              <div className="w-full max-w-5xl px-4 py-4 lg:px-6 lg:py-6">
+              <div className="w-full h-full px-0 py-0 xl:px-6 xl:py-6 xl:max-w-5xl xl:mx-auto">
                 {/* sourceUrl: motor tespiti ham adres üzerinden yapılmalı —
                     `src` proxy adresi olduğunda token şifreli olduğu için
                     uzantı görünmez ve canlı yayınlar yanlış motora düşer.
@@ -558,6 +555,124 @@ export default function HomePage() {
             </div>
           )}
         </main>
+
+        {/* ── Sol iki sütun: kategori + kanallar ── */}
+        {/*
+            Masaüstü (≥1280px): yan yana, sabit genişlikler.
+            Tablet (768-1279px): yan yana, altında (oynatıcı üstte).
+            Mobil (<768px): tek sütun, mobilePane state ile geçiş.
+        */}
+        <div
+          className={[
+            "flex shrink-0 overflow-hidden border-t border-border xl:border-t-0 xl:border-r-0",
+            // Mobil: tek sütun, kalan yükseklik
+            "flex-1",
+            // Tablet: iki sütun yan yana
+            "md:flex-row",
+            // Masaüstü: yatay sıralama, sabit boyutlar
+            "xl:flex-row xl:shrink-0 xl:w-[520px] xl:flex-none xl:border-l-0",
+            // Masaüstü'de üst sırada değil, satır düzeninde sağda
+            "xl:order-first",
+          ].join(" ")}
+        >
+          {/* Kategori sütunu */}
+          {/*
+              Mobil: yalnızca mobilePane==="category" iken görünür.
+              Tablet+Masaüstü: her zaman görünür.
+          */}
+          <div
+            className={[
+              "flex flex-col overflow-hidden",
+              // Mobil: tam genişlik, diğer panel görünüyorsa gizle
+              mobilePane === "category" ? "flex" : "hidden",
+              // Tablet: 200px sabit, her zaman görünür
+              "md:flex md:w-[200px] md:shrink-0",
+              // Masaüstü: aynı
+              "xl:flex xl:w-[200px] xl:shrink-0",
+            ].join(" ")}
+          >
+            {loadingChannels || activeChannels === null ? (
+              <div className="flex h-full items-center justify-center border-r border-border">
+                <p className="text-sm text-muted-foreground" aria-live="polite">
+                  Yükleniyor…
+                </p>
+              </div>
+            ) : (
+              <CategoryList
+                key={activeTab}
+                channels={activeChannels}
+                selectedGroup={selectedGroup}
+                onSelectGroup={(group) => {
+                  setSelectedGroup(group);
+                  // Mobil: kategori seçilince kanal sütununa geç
+                  setMobilePane("channels");
+                }}
+              />
+            )}
+          </div>
+
+          {/* Kanal / Dizi sütunu */}
+          {/*
+              Mobil: yalnızca mobilePane==="channels" iken görünür; üstte geri düğmesi.
+              Tablet+Masaüstü: her zaman görünür.
+          */}
+          <div
+            id={`tabpanel-${activeTab}`}
+            role="tabpanel"
+            aria-labelledby={activeTab}
+            className={[
+              "flex flex-col overflow-hidden",
+              // Mobil
+              mobilePane === "channels" ? "flex" : "hidden",
+              // Tablet: 320px sabit, her zaman görünür
+              "md:flex md:w-[320px] md:shrink-0",
+              // Masaüstü: aynı
+              "xl:flex xl:w-[320px] xl:shrink-0",
+            ].join(" ")}
+          >
+            {/* Mobil geri düğmesi — yalnızca <768px */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
+              <button
+                type="button"
+                onClick={() => setMobilePane("category")}
+                aria-label="Kategori listesine geri dön"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-raised text-foreground transition-colors duration-150 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+              >
+                <ArrowLeft aria-hidden className="size-4" />
+              </button>
+              <span className="truncate text-sm font-medium text-muted-foreground">
+                {selectedGroup || "Tümü"}
+              </span>
+            </div>
+
+            {loadingChannels || activeChannels === null ? (
+              <p
+                className="px-4 py-8 text-center text-sm text-muted-foreground"
+                aria-live="polite"
+              >
+                Kanallar yükleniyor…
+              </p>
+            ) : activeTab === "series" ? (
+              // Dizi sekmesi: iki seviyeli gezinme (dizi → bölüm)
+              // key={activeTab} sekme değişiminde durumu sıfırlar
+              <SeriesList
+                key={activeTab}
+                channels={activeChannels}
+                selectedId={selected?.id ?? null}
+                onSelect={handleSelect}
+              />
+            ) : (
+              // key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (arama/grup/kaydırma sıfırlanır)
+              <ChannelList
+                key={activeTab}
+                channels={activeChannels}
+                selectedId={selected?.id ?? null}
+                onSelect={handleSelect}
+                selectedGroup={selectedGroup}
+              />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
