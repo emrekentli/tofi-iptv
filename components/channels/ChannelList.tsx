@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Channel } from "@/lib/types";
 
@@ -33,10 +33,17 @@ function extractGroups(channels: Channel[]): string[] {
 
 export function ChannelList({ channels, selectedId, onSelect }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchId = useId();
+  const groupId = useId();
 
   const [searchRaw, setSearchRaw] = useState("");
   const [group, setGroup] = useState("");
   const search = useDebounce(searchRaw, DEBOUNCE_MS);
+
+  // Gezinme odak indeksi (roving focus için)
+  const [focusedIdx, setFocusedIdx] = useState(0);
+  // Satır düğmelerine ref erişimi için (odak taşımak amacıyla)
+  const rowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
   // Grup listesi kanallar değiştiğinde yeniden hesaplanır.
   const groups = useMemo(() => extractGroups(channels), [channels]);
@@ -51,10 +58,22 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
     });
   }, [channels, search, group]);
 
-  // Filtre değiştiğinde listeyi en başa kaydır.
+  // Filtre değiştiğinde listeyi en başa kaydır ve odağı sıfırla.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
+    setFocusedIdx(0);
   }, [search, group]);
+
+  // Odaklanan satırı görünüme çek ve DOM odağını taşı.
+  function moveFocus(nextIdx: number) {
+    const clamped = Math.max(0, Math.min(nextIdx, filtered.length - 1));
+    setFocusedIdx(clamped);
+    virtualizer.scrollToIndex(clamped, { align: "auto" });
+    // scrollToIndex hemen DOM güncellemesi sağlamayabilir; bir tick sonra odakla.
+    requestAnimationFrame(() => {
+      rowRefs.current.get(clamped)?.focus();
+    });
+  }
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual bilinen uyumsuzluk; kaçınılmaz
   const virtualizer = useVirtualizer({
@@ -62,6 +81,7 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
+    getItemKey: (index) => filtered[index]!.id,
   });
 
   const items = virtualizer.getVirtualItems();
@@ -70,33 +90,60 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Arama ve grup filtresi */}
       <div className="flex flex-col gap-2 border-b border-border px-3 py-3">
+        <label htmlFor={searchId} className="text-sm font-medium text-foreground">
+          Kanal ara
+        </label>
         <input
+          id={searchId}
           type="search"
           value={searchRaw}
           onChange={(e) => setSearchRaw(e.target.value)}
           placeholder="Kanal ara…"
-          aria-label="Kanal ara"
-          className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
+          className="h-11 w-full rounded-lg border border-border bg-surface px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
         />
         {groups.length > 0 && (
-          <select
-            value={group}
-            onChange={(e) => setGroup(e.target.value)}
-            aria-label="Grup filtrele"
-            className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
-          >
-            <option value="">Tüm gruplar</option>
-            {groups.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
+          <>
+            <label htmlFor={groupId} className="text-sm font-medium text-foreground">
+              Grup filtrele
+            </label>
+            <select
+              id={groupId}
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              className="h-11 w-full rounded-lg border border-border bg-surface px-3 text-base text-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text"
+            >
+              <option value="">Tüm gruplar</option>
+              {groups.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </>
         )}
       </div>
 
       {/* Sanallaştırılmış liste */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+        onKeyDown={(e) => {
+          if (filtered.length === 0) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            moveFocus(focusedIdx + 1);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            moveFocus(focusedIdx - 1);
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            moveFocus(0);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            moveFocus(filtered.length - 1);
+          }
+        }}
+      >
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
             Eşleşen kayıt yok
@@ -108,6 +155,7 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
             {items.map((vRow) => {
               const channel = filtered[vRow.index]!;
               const isSelected = channel.id === selectedId;
+              const isFocused = vRow.index === focusedIdx;
               return (
                 <div
                   key={vRow.key}
@@ -124,7 +172,16 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
                   <ChannelRow
                     channel={channel}
                     isSelected={isSelected}
+                    isFocused={isFocused}
                     onSelect={onSelect}
+                    onFocus={() => setFocusedIdx(vRow.index)}
+                    registerRef={(el) => {
+                      if (el) {
+                        rowRefs.current.set(vRow.index, el);
+                      } else {
+                        rowRefs.current.delete(vRow.index);
+                      }
+                    }}
                   />
                 </div>
               );
@@ -141,27 +198,35 @@ export function ChannelList({ channels, selectedId, onSelect }: Props) {
 interface RowProps {
   channel: Channel;
   isSelected: boolean;
+  isFocused: boolean;
   onSelect: (channel: Channel) => void;
+  onFocus: () => void;
+  registerRef: (el: HTMLButtonElement | null) => void;
 }
 
-function ChannelRow({ channel, isSelected, onSelect }: RowProps) {
+function ChannelRow({ channel, isSelected, isFocused, onSelect, onFocus, registerRef }: RowProps) {
   const [logoError, setLogoError] = useState(false);
   const initial = channel.name.charAt(0).toUpperCase();
 
   return (
     <button
       type="button"
+      ref={registerRef}
       onClick={() => onSelect(channel)}
-      aria-pressed={isSelected}
+      onFocus={onFocus}
+      aria-current={isSelected ? "true" : undefined}
+      tabIndex={isFocused ? 0 : -1}
       title={channel.name}
       className={[
-        // Temel satır stili
-        "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors duration-150",
+        // Temel satır stili — pr-3 sabit, pl-[9px] seçili/seçilmez eşit tutulur
+        // (border-l-[3px] her iki durumda da var; sol kenar boşluğu kaymaması için pl-[9px])
+        "flex w-full items-center gap-3 border-l-[3px] pl-[9px] pr-3 py-2 text-left transition-colors duration-150",
         "min-h-[44px]",
-        // Seçim durumu: sol çubuk + arka plan (yalnızca renk değil)
+        // Seçim durumu: sol çubuk rengi + arka plan (yalnızca renkle değil)
         isSelected
-          ? "border-l-[3px] border-accent bg-surface-raised pl-[9px]"
-          : "border-l-[3px] border-transparent hover:bg-surface-raised",
+          ? "border-accent bg-surface-raised"
+          : "border-transparent hover:bg-surface-raised",
+        "focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring",
       ].join(" ")}
     >
       {/* Logo — her zaman 32×32 yer kaplar; düzen kaymasını önler */}

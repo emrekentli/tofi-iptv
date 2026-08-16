@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Tv, Film, Clapperboard, RefreshCw } from "lucide-react";
+import { Tv, Film, Clapperboard, RefreshCw, X } from "lucide-react";
 import { loadChannels, clearChannels } from "@/lib/db";
 import { PlaylistForm } from "@/components/channels/PlaylistForm";
 import { ChannelList } from "@/components/channels/ChannelList";
@@ -16,12 +16,26 @@ const TABS: { kind: TabKind; label: string; icon: React.ElementType }[] = [
   { kind: "series", label: "Dizi", icon: Clapperboard },
 ];
 
+/** Sayfa HTTPS iken HTTP yayın karışık içerik sayılıp engellenir; o durumda
+ *  proxy zorunludur. Diğer hallerde tarayıcı doğrudan çekebilir —
+ *  sunucudan video trafiği geçmez ve gecikme düşer. */
+function proxyGerekli(streamUrl: string): boolean {
+  if (process.env.NEXT_PUBLIC_FORCE_PROXY === "1") return true;
+  if (typeof window === "undefined") return true;
+  return window.location.protocol === "https:" && streamUrl.startsWith("http:");
+}
+
 export default function HomePage() {
   const [allChannels, setAllChannels] = useState<Channel[] | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKind>("live");
   const [selected, setSelected] = useState<Channel | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [signError, setSignError] = useState<string | null>(null);
+  const [skippedNotice, setSkippedNotice] = useState<number | null>(null);
+
+  // Sekme düğmelerine DOM odağı taşımak için ref dizisi
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Seçilen kanalın id'sini ref'e yansıt; stale closure olmadan race condition
   // kontrolü için. useEffect ile senkronize edilir; render sırasında okunmaz.
@@ -32,9 +46,15 @@ export default function HomePage() {
 
   // IndexedDB'yi açılışta yükle.
   useEffect(() => {
-    loadChannels().then((channels) => {
-      setAllChannels(channels.length > 0 ? channels : []);
-    });
+    loadChannels()
+      .then((channels) => {
+        setAllChannels(channels);
+      })
+      .catch(() => {
+        setDbError(
+          "Tarayıcı depolamasına erişilemedi. Gizli mod veya engellenen depolama alanı olabilir.",
+        );
+      });
   }, []);
 
   // Kanalları kind'a göre üçe böl — her renderda değil, bir kez.
@@ -72,22 +92,41 @@ export default function HomePage() {
     setSelected(channel);
     setSrc(null);
     setSignError(null);
-    const response = await fetch("/api/sign", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: channel.url }),
-    });
-    if (!response.ok) {
-      // Seçim değiştiyse bu hatayı gösterme.
-      if (selectedIdRef.current === channel.id) {
-        setSignError("Yayın adresi hazırlanamadı.");
-      }
+
+    if (!proxyGerekli(channel.url)) {
+      // Sağlayıcı CORS başlığı gönderiyor; tarayıcı doğrudan çekebilir.
+      // Sunucudan video trafiği geçmez.
+      if (selectedIdRef.current !== channel.id) return;
+      setSrc(channel.url);
       return;
     }
-    const { src: signedSrc } = await response.json();
-    // Yanıt gecikmeli geldiyse ve kullanıcı başka kanala geçtiyse uygulama.
-    if (selectedIdRef.current !== channel.id) return;
-    setSrc(signedSrc as string);
+
+    try {
+      const response = await fetch("/api/sign", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: channel.url }),
+      });
+      if (!response.ok) {
+        // Seçim değiştiyse bu hatayı gösterme.
+        if (selectedIdRef.current === channel.id) {
+          setSignError(
+            "Yayın adresi hazırlanamadı. Tekrar denemek için kanalı seçin.",
+          );
+        }
+        return;
+      }
+      const { src: signedSrc } = await response.json() as { src: string };
+      // Yanıt gecikmeli geldiyse ve kullanıcı başka kanala geçtiyse uygulama.
+      if (selectedIdRef.current !== channel.id) return;
+      setSrc(signedSrc);
+    } catch {
+      if (selectedIdRef.current === channel.id) {
+        setSignError(
+          "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip kanalı tekrar seçin.",
+        );
+      }
+    }
   }, []);
 
   async function handleReset() {
@@ -96,17 +135,28 @@ export default function HomePage() {
     setSelected(null);
     setSrc(null);
     setSignError(null);
+    setSkippedNotice(null);
   }
 
-  function handleLoaded(channels: Channel[]) {
+  function handleLoaded(channels: Channel[], skipped?: number) {
     setAllChannels(channels);
     setSelected(null);
     setSrc(null);
     setSignError(null);
+    if (skipped && skipped > 0) {
+      setSkippedNotice(skipped);
+    }
+  }
+
+  function activateTab(kind: TabKind) {
+    const idx = TABS.findIndex((t) => t.kind === kind);
+    setActiveTab(kind);
+    // DOM odağını yeni aktif sekme düğmesine taşı (B4 düzeltmesi)
+    tabRefs.current[idx]?.focus();
   }
 
   // Yükleniyor durumu
-  if (allChannels === null) {
+  if (allChannels === null && dbError === null) {
     return (
       <div className="flex h-dvh items-center justify-center">
         <p className="text-sm text-muted-foreground" aria-live="polite">
@@ -116,8 +166,19 @@ export default function HomePage() {
     );
   }
 
+  // IndexedDB hatası
+  if (dbError !== null) {
+    return (
+      <div className="flex h-dvh items-center justify-center px-4">
+        <p role="alert" className="text-sm text-destructive text-center max-w-sm">
+          {dbError}
+        </p>
+      </div>
+    );
+  }
+
   // IndexedDB boşsa playlist formunu göster
-  if (allChannels.length === 0) {
+  if ((allChannels ?? []).length === 0) {
     return (
       <div className="flex h-dvh items-center justify-center px-4">
         <PlaylistForm onLoaded={handleLoaded} />
@@ -139,25 +200,34 @@ export default function HomePage() {
             const idx = TABS.findIndex((t) => t.kind === activeTab);
             if (e.key === "ArrowRight") {
               e.preventDefault();
-              setActiveTab(TABS[(idx + 1) % TABS.length]!.kind);
+              activateTab(TABS[(idx + 1) % TABS.length]!.kind);
             } else if (e.key === "ArrowLeft") {
               e.preventDefault();
-              setActiveTab(TABS[(idx + TABS.length - 1) % TABS.length]!.kind);
+              activateTab(TABS[(idx + TABS.length - 1) % TABS.length]!.kind);
+            } else if (e.key === "Home") {
+              e.preventDefault();
+              activateTab(TABS[0]!.kind);
+            } else if (e.key === "End") {
+              e.preventDefault();
+              activateTab(TABS[TABS.length - 1]!.kind);
             }
           }}
         >
-          {TABS.map(({ kind, label, icon: Icon }) => {
+          {TABS.map(({ kind, label, icon: Icon }, i) => {
             const isActive = activeTab === kind;
             const count = tabCount(kind);
             return (
               <button
                 key={kind}
+                ref={(el) => { tabRefs.current[i] = el; }}
                 role="tab"
                 aria-selected={isActive}
+                aria-controls={`tabpanel-${kind}`}
                 tabIndex={isActive ? 0 : -1}
-                onClick={() => setActiveTab(kind)}
+                onClick={() => activateTab(kind)}
                 className={[
                   "relative flex min-h-[44px] items-center gap-1.5 px-4 text-sm font-medium transition-colors duration-150",
+                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded-sm",
                   isActive
                     ? // Aktif sekme: alt çizgi + foreground rengi (yalnızca renkle değil)
                       "text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-accent"
@@ -167,11 +237,9 @@ export default function HomePage() {
                 <Icon aria-hidden className="size-4" />
                 <span>
                   {label}
-                  {count > 0 && (
-                    <span className="ml-1 text-xs text-muted-foreground">
-                      ({count.toLocaleString("tr-TR")})
-                    </span>
-                  )}
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    ({count.toLocaleString("tr-TR")})
+                  </span>
                 </span>
               </button>
             );
@@ -183,18 +251,45 @@ export default function HomePage() {
           type="button"
           onClick={handleReset}
           aria-label="Playlist'i değiştir"
-          className="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground transition-colors duration-150 hover:bg-surface-raised hover:text-foreground"
+          className="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground transition-colors duration-150 hover:bg-surface-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           <RefreshCw aria-hidden className="size-4" />
           <span className="hidden sm:inline">Playlist değiştir</span>
         </button>
       </header>
 
+      {/* Atlanmış kayıt bildirimi */}
+      {skippedNotice !== null && skippedNotice > 0 && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-4 py-2 text-sm text-muted-foreground"
+        >
+          <span>
+            {skippedNotice.toLocaleString("tr-TR")} kayıt atlandı (geçersiz biçim).
+          </span>
+          <button
+            type="button"
+            aria-label="Bildirimi kapat"
+            onClick={() => setSkippedNotice(null)}
+            className="shrink-0 rounded p-0.5 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+          >
+            <X aria-hidden className="size-4" />
+          </button>
+        </div>
+      )}
+
       {/* Ana içerik: ≥1024px solda liste + sağda oynatıcı; <1024px oynatıcı üstte */}
       <div className="flex flex-1 overflow-hidden lg:flex-row flex-col-reverse">
         {/* Sol: kanal listesi (lg'de 320px sabit, küçükte yarım ekran) */}
-        <aside className="flex flex-col border-r border-border bg-surface lg:w-80 lg:shrink-0 overflow-hidden flex-1 lg:flex-none">
+        <aside
+          id={`tabpanel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={activeTab}
+          className="flex flex-col border-r border-border bg-surface lg:w-80 lg:shrink-0 overflow-hidden flex-1 lg:flex-none"
+        >
+          {/* key={activeTab} her sekme için bağımsız ChannelList örneği sağlar (B3) */}
           <ChannelList
+            key={activeTab}
             channels={activeChannels()}
             selectedId={selected?.id ?? null}
             onSelect={handleSelect}

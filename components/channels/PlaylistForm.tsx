@@ -2,7 +2,7 @@
 
 import { Loader2, AlertCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
-import { saveChannels } from "@/lib/db";
+import { clearChannels, saveChannels } from "@/lib/db";
 import type { Channel } from "@/lib/types";
 
 type Phase =
@@ -12,7 +12,7 @@ type Phase =
   | { kind: "done" };
 
 interface Props {
-  onLoaded: (channels: Channel[]) => void;
+  onLoaded: (channels: Channel[], skipped?: number) => void;
 }
 
 export function PlaylistForm({ onLoaded }: Props) {
@@ -23,7 +23,7 @@ export function PlaylistForm({ onLoaded }: Props) {
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState<number | null>(null);
+  const [urlEmpty, setUrlEmpty] = useState(false);
 
   const isLoading = phase.kind === "downloading" || phase.kind === "writing";
 
@@ -37,10 +37,14 @@ export function PlaylistForm({ onLoaded }: Props) {
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const url = inputRef.current?.value.trim() ?? "";
-    if (!url) return;
+    if (!url) {
+      setUrlEmpty(true);
+      inputRef.current?.focus();
+      return;
+    }
+    setUrlEmpty(false);
 
     setError(null);
-    setSkipped(null);
     setPhase({ kind: "downloading" });
 
     let channels: Channel[];
@@ -76,13 +80,27 @@ export function PlaylistForm({ onLoaded }: Props) {
     const total = channels.length;
     setPhase({ kind: "writing", written: 0, total });
 
-    await saveChannels(channels, (written) => {
-      setPhase({ kind: "writing", written, total });
-    });
+    try {
+      await saveChannels(channels, (written) => {
+        setPhase({ kind: "writing", written, total });
+      });
+    } catch {
+      // saveChannels önce clear() çağırır; hata oluşursa veritabanı kısmen
+      // dolu kalabilir. Tutarsız durumu temizle; kullanıcı yeniden dener.
+      try {
+        await clearChannels();
+      } catch {
+        // Temizleme de başarısız olursa sessizce devam et.
+      }
+      setError(
+        "Kanallar kaydedilemedi. Tarayıcı depolama alanı dolu olabilir. Sayfayı yenileyip tekrar deneyin.",
+      );
+      setPhase({ kind: "idle" });
+      return;
+    }
 
-    if (skippedCount > 0) setSkipped(skippedCount);
     setPhase({ kind: "done" });
-    onLoaded(channels);
+    onLoaded(channels, skippedCount);
   }
 
   return (
@@ -105,13 +123,26 @@ export function PlaylistForm({ onLoaded }: Props) {
             type="url"
             required
             disabled={isLoading}
+            autoComplete="off"
             placeholder="http://sunucu/playlist.m3u"
             aria-describedby={
-              [error ? errorId : null, statusId].filter(Boolean).join(" ") || undefined
+              [error || urlEmpty ? errorId : null, statusId].filter(Boolean).join(" ") || undefined
             }
+            aria-invalid={error !== null || urlEmpty ? true : undefined}
+            onChange={() => { if (urlEmpty) setUrlEmpty(false); }}
             className="h-11 rounded-lg border border-border bg-surface px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-accent-text focus:outline-2 focus:outline-accent-text disabled:opacity-50"
           />
-          {error && (
+          {urlEmpty && (
+            <p
+              id={errorId}
+              role="alert"
+              className="flex items-center gap-1.5 text-sm text-destructive"
+            >
+              <AlertCircle aria-hidden className="size-4 shrink-0" />
+              Lütfen bir playlist adresi girin.
+            </p>
+          )}
+          {error && !urlEmpty && (
             <p
               id={errorId}
               role="alert"
@@ -132,16 +163,10 @@ export function PlaylistForm({ onLoaded }: Props) {
           {statusText()}
         </p>
 
-        {skipped !== null && skipped > 0 && (
-          <p className="text-sm text-muted-foreground">
-            {skipped.toLocaleString("tr-TR")} kayıt atlandı.
-          </p>
-        )}
-
         <button
           type="submit"
           disabled={isLoading}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-5 font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-5 font-semibold text-white transition-colors duration-150 hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           {isLoading && <Loader2 aria-hidden className="size-4 animate-spin" />}
           {isLoading ? "Yükleniyor…" : "Kanalları yükle"}
@@ -150,8 +175,8 @@ export function PlaylistForm({ onLoaded }: Props) {
 
       {/* Güvenlik uyarısı */}
       <p className="text-xs text-muted-foreground">
-        Playlist adresi kullanıcı adı ve şifre içerir. Bu adres yalnızca bu
-        tarayıcıda saklanır; hiçbir sunucuya veya üçüncü tarafa iletilmez.
+        Playlist adresi yalnızca bu uygulamanın kendi sunucusuna gönderilir,
+        ayrıştırılır ve orada saklanmaz; adres yalnızca bu tarayıcıda tutulur.
       </p>
     </div>
   );
