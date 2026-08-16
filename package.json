@@ -11,6 +11,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "hls.js": "^1.7.0",
+    "lucide-react": "^1.31.0",
+    "mpegts.js": "^1.8.2",
     "next": "16.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
