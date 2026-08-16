@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import type { ChannelKind } from "../types";
+import type { ChannelKind, SeriesInfo } from "../types";
 import { classifyChannel } from "./classify";
+import { parseSeriesInfo } from "./series";
 
 /** Süre, öznitelik bloğu ve görünen adı ayırır. Öznitelik değerindeki
  *  virgüller ada karışmasın diye ad, öznitelik bloğundan sonraki
@@ -15,6 +16,8 @@ export type ParsedChannel = {
   group?: string;
   kind: ChannelKind;
   rawUrl: string;
+  /** Yalnızca dizi kayıtlarında dolar; diğer türlerde tanımsız. */
+  series?: SeriesInfo;
 };
 
 /** Adresten kararlı kısa kimlik. Ad değişse de aynı kanal aynı kimliği alır. */
@@ -68,11 +71,14 @@ export function parseM3U(text: string): {
     if (line.startsWith("#")) continue;
 
     if (pending) {
+      const kind = classifyChannel(line);
       channels.push({
         ...pending,
         id: channelId(line),
-        kind: classifyChannel(line),
+        kind,
         rawUrl: line,
+        // Yalnızca dizi kayıtları için ayrıştır — 34k gereksiz regex çalıştırmayı önler.
+        ...(kind === "series" ? { series: parseSeriesInfo(pending.name) ?? undefined } : {}),
       });
       pending = null;
     }
