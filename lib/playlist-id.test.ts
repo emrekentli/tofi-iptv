@@ -29,4 +29,8 @@ describe("playlistIdFromUrl", () => {
     const id = await playlistIdFromUrl("");
     expect(id).toHaveLength(12);
   });
+  it("onceki Web Crypto tabanli kimliklerle uyumludur", async () => {
+    expect(await playlistIdFromUrl("")).toBe("2jmj7l5rSw0y");
+    expect(await playlistIdFromUrl("abc")).toBe("qZk-NkcGgWq6");
+  });
 });
